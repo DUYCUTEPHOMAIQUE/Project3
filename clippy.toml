@@ -1,0 +1,26 @@
+# Clippy configuration
+# Deny all warnings
+deny = ["warnings"]
+
+# Allow some common patterns
+[allow]
+# Allow single character names in some contexts
+single_char_pattern = true
+
+# Allow too many arguments (will be addressed later)
+too_many_arguments = false
+
+# Allow complex types (will be addressed later)
+type_complexity = false
+
+# Allow missing documentation (will be added later)
+missing_docs = false
+
+# Deny specific patterns
+[deny]
+# Deny unsafe code
+unsafe_code = { severity = "deny" }
+# Deny unwrap (prefer expect or proper error handling)
+unwrap_used = { severity = "warn" }
+expect_used = { severity = "allow" }
+

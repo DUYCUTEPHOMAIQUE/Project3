@@ -1,0 +1,36 @@
+[package]
+name = "core-rust"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "e2ee_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Crypto libraries
+ring.workspace = true
+x25519-dalek.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+# Serialization
+prost.workspace = true
+prost-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+prost-build = "0.12"
+
+[build-dependencies]
+prost-build = "0.12"
+
