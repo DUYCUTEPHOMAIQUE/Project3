@@ -1,25 +1,29 @@
-//! Error types for E2EE core library
-
 use thiserror::Error;
 
-/// Errors that can occur in E2EE operations
-#[derive(Error, Debug)]
+/// Error types for E2EE operations
+#[derive(Debug, Error)]
 pub enum E2EEError {
-    #[error("Cryptographic error: {0}")]
-    Crypto(String),
+    /// Crypto operations failed
+    #[error("Crypto error: {0}")]
+    CryptoError(String),
 
-    #[error("Key error: {0}")]
-    Key(String),
+    /// Key generation failed
+    #[error("Key generation error: {0}")]
+    KeyGenerationError(String),
 
+    /// Serialization/deserialization failed
     #[error("Serialization error: {0}")]
-    Serialization(String),
+    SerializationError(String),
 
-    #[error("Invalid input: {0}")]
-    InvalidInput(String),
+    /// Protocol violation
+    #[error("Protocol error: {0}")]
+    ProtocolError(String),
 
-    #[error("Internal error: {0}")]
-    Internal(String),
+    /// Invalid state
+    #[error("State error: {0}")]
+    StateError(String),
 }
 
+/// Result type alias for E2EE operations
 pub type Result<T> = std::result::Result<T, E2EEError>;
 

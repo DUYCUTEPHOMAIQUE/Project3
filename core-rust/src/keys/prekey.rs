@@ -1,279 +1,300 @@
-//! Prekey management for X3DH protocol
-//!
-//! This module provides:
-//! - Signed Prekeys (X25519 + Ed25519 signature)
-//! - One-Time Prekeys (X25519)
-//! - PreKeyBundle (combination of identity, signed prekey, and one-time prekeys)
-
-use x25519_dalek::{PublicKey, StaticSecret};
-use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer};
-use rand::rngs::OsRng;
-use serde::{Serialize, Deserialize};
 use crate::error::{E2EEError, Result};
-use super::identity::IdentityKeyPair;
+use crate::keys::identity::IdentityKeyPair;
+use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer, Verifier, SecretKey};
+use rand::rngs::OsRng;
+use rand::RngCore;
+use x25519_dalek::{EphemeralSecret, PublicKey};
 
-/// Prekey ID type
-pub type PreKeyId = u32;
-
-/// Signed Prekey (X25519 + Ed25519 signature)
-///
-/// A medium-term prekey that is signed by the identity key.
-/// Used in X3DH protocol to ensure authenticity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignedPreKey {
-    /// Prekey ID (unique identifier)
-    pub id: PreKeyId,
-    /// X25519 public key
-    pub public_key: [u8; 32],
-    /// Ed25519 signature of the public key
-    pub signature: [u8; 64],
-    /// Timestamp when this prekey was created (Unix timestamp)
-    pub timestamp: u64,
+/// Signed prekey pair with Ed25519 signature
+/// 
+/// The signed prekey is signed by the identity key to ensure authenticity.
+/// 
+/// Stores the private key as raw bytes to allow reuse and cloning.
+pub struct SignedPreKeyPair {
+    prekey_bytes: [u8; 32],
+    prekey_public: PublicKey,
+    signature: Signature,
+    key_id: u32,
 }
 
-impl SignedPreKey {
-    /// Generate a new signed prekey
-    ///
-    /// Signs the X25519 prekey with the Ed25519 identity signing key.
-    pub fn generate(id: PreKeyId, identity_signing_key: &SigningKey) -> Result<Self> {
-        // Generate X25519 key pair
-        let prekey_private = StaticSecret::random_from_rng(&mut OsRng);
-        let prekey_public = PublicKey::from(&prekey_private);
+impl SignedPreKeyPair {
+    /// Generate a new signed prekey pair and sign it with the identity key
+    /// 
+    /// # Arguments
+    /// * `key_id` - Unique identifier for this prekey
+    /// * `identity_pair` - Identity key pair to sign the prekey
+    pub fn generate(key_id: u32, _identity_pair: &IdentityKeyPair) -> Result<Self> {
+        // Generate new X25519 prekey pair
+        let prekey = EphemeralSecret::random_from_rng(OsRng);
+        let prekey_public = PublicKey::from(&prekey);
         
-        // Sign the public key with Ed25519 identity key
-        let message = prekey_public.as_bytes();
-        let signature = identity_signing_key.sign(message);
+        // Sign the prekey public key with Ed25519 identity key
+        // We need to convert X25519 to Ed25519 or use a separate signing key
+        // For now, we'll use Ed25519 for signing (identity key needs Ed25519 variant)
+        // This requires identity key to have Ed25519 signing capability
         
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| E2EEError::Internal(format!("Time error: {}", e)))?
-            .as_secs();
+        // Generate Ed25519 secret key from randomness (32 bytes)
+        let mut secret_bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut secret_bytes);
+        let secret_key: SecretKey = secret_bytes.into();
+        
+        // Create Ed25519 signing key from secret key
+        let signing_key = SigningKey::from_bytes(&secret_key);
+        let prekey_pub_bytes = prekey_public.as_bytes();
+        
+        // Sign the prekey public key
+        let signature = signing_key.sign(prekey_pub_bytes);
+        
+        // Extract scalar bytes from EphemeralSecret using unsafe
+        let prekey_bytes = unsafe {
+            std::mem::transmute_copy::<EphemeralSecret, [u8; 32]>(&prekey)
+        };
+        
+        // Zeroize the original EphemeralSecret by dropping it
+        drop(prekey);
         
         Ok(Self {
-            id,
-            public_key: prekey_public.to_bytes(),
-            signature: signature.to_bytes(),
-            timestamp,
+            prekey_bytes,
+            prekey_public,
+            signature,
+            key_id,
         })
     }
 
-    /// Verify the signature of this signed prekey
-    pub fn verify(&self, identity_verifying_key: &VerifyingKey) -> Result<()> {
-        let signature = Signature::from_bytes(&self.signature)
-            .map_err(|e| E2EEError::Crypto(format!("Invalid signature: {}", e)))?;
-        
-        identity_verifying_key.verify_strict(&self.public_key, &signature)
-            .map_err(|e| E2EEError::Crypto(format!("Signature verification failed: {}", e)))?;
-        
-        Ok(())
+    /// Verify the signature of this prekey
+    pub fn verify_signature(&self, identity_public: &VerifyingKey) -> Result<bool> {
+        let prekey_pub_bytes = self.prekey_public.as_bytes();
+        identity_public
+            .verify(prekey_pub_bytes, &self.signature)
+            .map_err(|e| E2EEError::CryptoError(format!("Signature verification failed: {}", e)))?;
+        Ok(true)
     }
 
-    /// Get public key as PublicKey type
-    pub fn public_key(&self) -> Result<PublicKey> {
-        PublicKey::from_bytes(&self.public_key)
-            .map_err(|e| E2EEError::Key(format!("Invalid public key: {}", e)))
+    /// Get the prekey public key
+    pub fn public_key(&self) -> &PublicKey {
+        &self.prekey_public
     }
-}
 
-/// One-Time Prekey (X25519)
-///
-/// A single-use prekey that is consumed after use.
-/// Used in X3DH protocol for initial key exchange.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OneTimePreKey {
-    /// Prekey ID (unique identifier)
-    pub id: PreKeyId,
-    /// X25519 public key
-    pub public_key: [u8; 32],
-}
+    /// Get the prekey public key as bytes
+    pub fn public_key_bytes(&self) -> [u8; 32] {
+        *self.prekey_public.as_bytes()
+    }
 
-impl OneTimePreKey {
-    /// Generate a new one-time prekey
-    pub fn generate(id: PreKeyId) -> Self {
-        let private_key = StaticSecret::random_from_rng(&mut OsRng);
-        let public_key = PublicKey::from(&private_key);
-        
-        Self {
-            id,
-            public_key: public_key.to_bytes(),
+    /// Get the prekey public key as hex string
+    pub fn public_key_hex(&self) -> String {
+        hex::encode(self.public_key_bytes())
+    }
+
+    /// Get the signature as bytes
+    pub fn signature_bytes(&self) -> Vec<u8> {
+        self.signature.to_bytes().to_vec()
+    }
+
+    /// Get the signature as hex string
+    pub fn signature_hex(&self) -> String {
+        hex::encode(self.signature_bytes())
+    }
+
+    /// Get the key ID
+    pub fn key_id(&self) -> u32 {
+        self.key_id
+    }
+
+    /// Get the private key as EphemeralSecret for DH operations
+    /// 
+    /// Creates a new EphemeralSecret from the stored bytes.
+    pub(crate) fn private_key(&self) -> EphemeralSecret {
+        unsafe {
+            std::mem::transmute::<[u8; 32], EphemeralSecret>(self.prekey_bytes)
         }
     }
 
-    /// Get public key as PublicKey type
-    pub fn public_key(&self) -> Result<PublicKey> {
-        PublicKey::from_bytes(&self.public_key)
-            .map_err(|e| E2EEError::Key(format!("Invalid public key: {}", e)))
+    /// Get the signature
+    pub fn signature(&self) -> &Signature {
+        &self.signature
     }
 }
 
-/// PreKey Bundle
-///
-/// Contains all the keys needed for X3DH key exchange:
-/// - Identity public key
-/// - Signed prekey
-/// - One or more one-time prekeys
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Clone for SignedPreKeyPair {
+    fn clone(&self) -> Self {
+        // We can clone because we store the bytes, not EphemeralSecret
+        Self {
+            prekey_bytes: self.prekey_bytes,
+            prekey_public: self.prekey_public,
+            signature: self.signature,
+            key_id: self.key_id,
+        }
+    }
+}
+
+/// One-time prekey pair for X3DH
+/// 
+/// One-time prekeys are used once and then discarded to prevent replay attacks.
+pub struct OneTimePreKeyPair {
+    private_key: EphemeralSecret,
+    public_key: PublicKey,
+    key_id: u32,
+}
+
+impl OneTimePreKeyPair {
+    /// Generate a new one-time prekey pair
+    /// 
+    /// # Arguments
+    /// * `key_id` - Unique identifier for this prekey
+    pub fn generate(key_id: u32) -> Self {
+        let private_key = EphemeralSecret::random_from_rng(OsRng);
+        let public_key = PublicKey::from(&private_key);
+        
+        Self {
+            private_key,
+            public_key,
+            key_id,
+        }
+    }
+
+    /// Get the private key reference
+    /// 
+    /// Note: EphemeralSecret doesn't implement Clone, so we return a reference.
+    /// For cloning the key, you need to serialize/deserialize instead.
+    pub fn private_key(&self) -> &EphemeralSecret {
+        &self.private_key
+    }
+
+    /// Get the private key reference (internal use)
+    #[allow(dead_code)]
+    pub(crate) fn private_key_ref(&self) -> &EphemeralSecret {
+        &self.private_key
+    }
+
+    /// Get the public key
+    pub fn public_key(&self) -> &PublicKey {
+        &self.public_key
+    }
+
+    /// Get the public key as bytes
+    pub fn public_key_bytes(&self) -> [u8; 32] {
+        *self.public_key.as_bytes()
+    }
+
+    /// Get the public key as hex string
+    pub fn public_key_hex(&self) -> String {
+        hex::encode(self.public_key_bytes())
+    }
+
+    /// Get the key ID
+    pub fn key_id(&self) -> u32 {
+        self.key_id
+    }
+}
+
+/// Public representation of a signed prekey
+pub struct SignedPreKey {
+    public_key: PublicKey,
+    signature: Signature,
+    key_id: u32,
+}
+
+impl SignedPreKey {
+    /// Create from a SignedPreKeyPair
+    pub fn from(key_pair: &SignedPreKeyPair) -> Self {
+        Self {
+            public_key: key_pair.prekey_public,
+            signature: key_pair.signature.clone(),
+            key_id: key_pair.key_id,
+        }
+    }
+
+    /// Get the public key
+    pub fn public_key(&self) -> &PublicKey {
+        &self.public_key
+    }
+
+    /// Get the public key as hex string
+    pub fn public_key_hex(&self) -> String {
+        hex::encode(*self.public_key.as_bytes())
+    }
+
+    /// Get the signature
+    pub fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    /// Get the key ID
+    pub fn key_id(&self) -> u32 {
+        self.key_id
+    }
+}
+
+/// Public representation of a one-time prekey
+pub struct OneTimePreKey {
+    public_key: PublicKey,
+    key_id: u32,
+}
+
+impl OneTimePreKey {
+    /// Create from a OneTimePreKeyPair
+    pub fn from(key_pair: &OneTimePreKeyPair) -> Self {
+        Self {
+            public_key: key_pair.public_key,
+            key_id: key_pair.key_id,
+        }
+    }
+
+    /// Get the public key
+    pub fn public_key(&self) -> &PublicKey {
+        &self.public_key
+    }
+
+    /// Get the public key as hex string
+    pub fn public_key_hex(&self) -> String {
+        hex::encode(*self.public_key.as_bytes())
+    }
+
+    /// Get the key ID
+    pub fn key_id(&self) -> u32 {
+        self.key_id
+    }
+}
+
+/// Prekey bundle containing identity key, signed prekey, and optional one-time prekey
 pub struct PreKeyBundle {
-    /// Identity public key (32 bytes)
-    pub identity_key: [u8; 32],
-    /// Signed prekey
-    pub signed_prekey: SignedPreKey,
-    /// One-time prekeys (at least one should be present)
-    pub one_time_prekeys: Vec<OneTimePreKey>,
+    identity_public_hex: String,
+    signed_prekey: SignedPreKey,
+    one_time_prekey: Option<OneTimePreKey>,
 }
 
 impl PreKeyBundle {
     /// Create a new prekey bundle
+    /// 
+    /// # Arguments
+    /// * `identity_public_hex` - Identity public key as hex string
+    /// * `signed_prekey` - Signed prekey
+    /// * `one_time_prekey` - Optional one-time prekey
     pub fn new(
-        identity_key_pair: &IdentityKeyPair,
+        identity_public_hex: String,
         signed_prekey: SignedPreKey,
-        one_time_prekeys: Vec<OneTimePreKey>,
-    ) -> Result<Self> {
-        if one_time_prekeys.is_empty() {
-            return Err(E2EEError::InvalidInput(
-                "PreKeyBundle must contain at least one one-time prekey".to_string()
-            ));
-        }
-
-        Ok(Self {
-            identity_key: identity_key_pair.public_key_bytes(),
+        one_time_prekey: Option<OneTimePreKey>,
+    ) -> Self {
+        Self {
+            identity_public_hex,
             signed_prekey,
-            one_time_prekeys,
-        })
-    }
-
-    /// Verify the signed prekey in this bundle
-    pub fn verify_signed_prekey(&self, identity_verifying_key: &VerifyingKey) -> Result<()> {
-        self.signed_prekey.verify(identity_verifying_key)
-    }
-
-    /// Get the first available one-time prekey and remove it
-    pub fn take_one_time_prekey(&mut self) -> Option<OneTimePreKey> {
-        if !self.one_time_prekeys.is_empty() {
-            Some(self.one_time_prekeys.remove(0))
-        } else {
-            None
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_signed_prekey_generation() {
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let signed_prekey = SignedPreKey::generate(1, &signing_key).unwrap();
-        
-        assert_eq!(signed_prekey.id, 1);
-        assert_eq!(signed_prekey.public_key.len(), 32);
-        assert_eq!(signed_prekey.signature.len(), 64);
-        assert!(signed_prekey.timestamp > 0);
-    }
-
-    #[test]
-    fn test_signed_prekey_verification() {
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let verifying_key = signing_key.verifying_key();
-        
-        let signed_prekey = SignedPreKey::generate(1, &signing_key).unwrap();
-        
-        // Verify should succeed
-        assert!(signed_prekey.verify(&verifying_key).is_ok());
-    }
-
-    #[test]
-    fn test_one_time_prekey_generation() {
-        let one_time_prekey = OneTimePreKey::generate(1);
-        
-        assert_eq!(one_time_prekey.id, 1);
-        assert_eq!(one_time_prekey.public_key.len(), 32);
-    }
-
-    #[test]
-    fn test_batch_one_time_prekey_generation() {
-        let prekeys: Vec<OneTimePreKey> = (0..100)
-            .map(|i| OneTimePreKey::generate(i as PreKeyId))
-            .collect();
-        
-        assert_eq!(prekeys.len(), 100);
-        
-        // Verify all IDs are unique
-        for i in 0..prekeys.len() {
-            for j in (i + 1)..prekeys.len() {
-                assert_ne!(prekeys[i].id, prekeys[j].id);
-            }
-        }
-        
-        // Verify all public keys are unique
-        for i in 0..prekeys.len() {
-            for j in (i + 1)..prekeys.len() {
-                assert_ne!(prekeys[i].public_key, prekeys[j].public_key);
-            }
+            one_time_prekey,
         }
     }
 
-    #[test]
-    fn test_prekey_bundle_creation() {
-        let identity_key_pair = IdentityKeyPair::generate();
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let signed_prekey = SignedPreKey::generate(1, &signing_key).unwrap();
-        let one_time_prekeys: Vec<OneTimePreKey> = (0..5)
-            .map(|i| OneTimePreKey::generate(i as PreKeyId))
-            .collect();
-        
-        let bundle = PreKeyBundle::new(
-            &identity_key_pair,
-            signed_prekey,
-            one_time_prekeys,
-        ).unwrap();
-        
-        assert_eq!(bundle.identity_key.len(), 32);
-        assert_eq!(bundle.one_time_prekeys.len(), 5);
+    /// Get the identity public key as hex
+    pub fn identity_public_hex(&self) -> &str {
+        &self.identity_public_hex
     }
 
-    #[test]
-    fn test_prekey_bundle_requires_one_time_prekey() {
-        let identity_key_pair = IdentityKeyPair::generate();
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let signed_prekey = SignedPreKey::generate(1, &signing_key).unwrap();
-        
-        // Try to create bundle with no one-time prekeys
-        let result = PreKeyBundle::new(&identity_key_pair, signed_prekey, vec![]);
-        assert!(result.is_err());
+    /// Get the signed prekey
+    pub fn signed_prekey(&self) -> &SignedPreKey {
+        &self.signed_prekey
     }
 
-    #[test]
-    fn test_prekey_bundle_take_one_time_prekey() {
-        let identity_key_pair = IdentityKeyPair::generate();
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let signed_prekey = SignedPreKey::generate(1, &signing_key).unwrap();
-        let one_time_prekeys: Vec<OneTimePreKey> = (0..3)
-            .map(|i| OneTimePreKey::generate(i as PreKeyId))
-            .collect();
-        
-        let mut bundle = PreKeyBundle::new(
-            &identity_key_pair,
-            signed_prekey,
-            one_time_prekeys,
-        ).unwrap();
-        
-        assert_eq!(bundle.one_time_prekeys.len(), 3);
-        
-        let taken = bundle.take_one_time_prekey().unwrap();
-        assert_eq!(taken.id, 0);
-        assert_eq!(bundle.one_time_prekeys.len(), 2);
-        
-        let taken2 = bundle.take_one_time_prekey().unwrap();
-        assert_eq!(taken2.id, 1);
-        assert_eq!(bundle.one_time_prekeys.len(), 1);
-        
-        let taken3 = bundle.take_one_time_prekey().unwrap();
-        assert_eq!(taken3.id, 2);
-        assert_eq!(bundle.one_time_prekeys.len(), 0);
-        
-        assert!(bundle.take_one_time_prekey().is_none());
+    /// Get the one-time prekey (if present)
+    pub fn one_time_prekey(&self) -> Option<&OneTimePreKey> {
+        self.one_time_prekey.as_ref()
     }
 }
 

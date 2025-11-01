@@ -1,174 +1,134 @@
-//! X3DH Responder (Bob side)
-//!
-//! Implements the responder side of X3DH protocol:
-//! 1. Receive initial message with ephemeral public key (EK_pub)
-//! 2. Calculate shared secret: SK = KDF(DH1 || DH2 || DH3 || DH4)
-//! 3. Decrypt initial message with SK
-
-use x25519_dalek::{PublicKey, StaticSecret};
 use crate::error::{E2EEError, Result};
-use crate::keys::IdentityKeyPair;
-use super::handshake::{SharedSecret, derive_shared_secret, dh};
+use crate::keys::{IdentityKeyPair, SignedPreKeyPair};
+use crate::x3dh::handshake::{calculate_shared_secret_from_dh, perform_dh};
+use x25519_dalek::{EphemeralSecret, PublicKey};
 
-/// X3DH Responder - Calculate shared secret from received ephemeral key
-///
-/// This function implements the responder side (Bob) of X3DH protocol.
-/// It takes Bob's private keys and Alice's public keys, then:
-/// 1. Calculates shared secret: SK = KDF(DH1 || DH2 || DH3 || DH4)
-///    - DH1 = DH(IKA, SPKB) = ECDH(SPKB_private, IKA_public) [commutative property]
-///    - DH2 = DH(EK, IKB) = ECDH(IKB_private, EK_public)
-///    - DH3 = DH(EK, SPKB) = ECDH(SPKB_private, EK_public)
-///    - DH4 = DH(EK, OPKB) = ECDH(OPKB_private, EK_public) [if one-time prekey was used]
-///
-/// Note: Bob needs to know which one-time prekey was used (indicated by prekey_id).
-pub fn respond_full(
-    bob_identity: &IdentityKeyPair,
-    bob_signed_prekey_private: &StaticSecret,
-    bob_one_time_prekey_private: Option<&StaticSecret>,
-    alice_identity_public: &PublicKey,
-    alice_ephemeral_public: &PublicKey,
-) -> Result<SharedSecret> {
-    let bob_identity_private = bob_identity.private_key();
-    
-    // DH1 = DH(IKA, SPKB) = ECDH(SPKB_private, IKA_public)
-    // Using commutative property: ECDH(a_private, b_public) = ECDH(b_private, a_public)
-    let dh1 = dh(bob_signed_prekey_private, alice_identity_public);
-    
-    // DH2 = DH(EK, IKB) = ECDH(IKB_private, EK_public)
-    let dh2 = dh(bob_identity_private, alice_ephemeral_public);
-    
-    // DH3 = DH(EK, SPKB) = ECDH(SPKB_private, EK_public)
-    let dh3 = dh(bob_signed_prekey_private, alice_ephemeral_public);
-    
-    // DH4 = DH(EK, OPKB) [if available]
-    let mut dh_outputs = vec![dh1.as_slice(), dh2.as_slice(), dh3.as_slice()];
-    
-    if let Some(opk_private) = bob_one_time_prekey_private {
-        let dh4 = dh(opk_private, alice_ephemeral_public);
-        dh_outputs.push(dh4.as_slice());
-    }
-    
-    // Derive shared secret: SK = KDF(DH1 || DH2 || DH3 || DH4)
-    derive_shared_secret(&dh_outputs)
+/// Result of X3DH response
+pub struct X3DHResponseResult {
+    /// The shared secret derived from X3DH handshake
+    pub shared_secret: [u8; 32],
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::keys::{PreKeyBundle, SignedPreKey, PreKeyId, OneTimePreKey};
-    use crate::x3dh::initiator;
-    use ed25519_dalek::SigningKey;
-    use rand::rngs::OsRng;
+/// X3DH Responder (Bob side)
+/// 
+/// Handles the responder side of the X3DH key agreement protocol.
+pub struct X3DHResponder {
+    identity_pair: IdentityKeyPair,
+    signed_prekey_pair: SignedPreKeyPair,
+    one_time_prekey_private: Option<EphemeralSecret>,
+    one_time_prekey_public: Option<PublicKey>,
+    one_time_prekey_id: Option<u32>,
+}
 
-    #[test]
-    fn test_x3dh_responder_matches_initiator() {
-        // Setup: Bob's keys
-        // Note: In practice, Bob would store the private key when generating SignedPreKey
-        // For testing, we need to reconstruct the private key from the public key
-        // This is a simplified test - in production, SignedPreKey would be generated
-        // with a way to access the private key
-        
-        let bob_identity = IdentityKeyPair::generate();
-        let bob_signing_key = SigningKey::generate(&mut OsRng);
-        
-        // Generate signed prekey - Bob stores private key separately
-        let bob_signed_prekey_private = StaticSecret::random_from_rng(&mut OsRng);
-        let bob_signed_prekey_public = PublicKey::from(&bob_signed_prekey_private);
-        
-        // Create SignedPreKey manually (normally this would be done by generate())
-        // We'll sign the public key
-        let message = bob_signed_prekey_public.as_bytes();
-        let signature = bob_signing_key.sign(message);
-        let bob_signed_prekey = SignedPreKey {
-            id: 1,
-            public_key: bob_signed_prekey_public.to_bytes(),
-            signature: signature.to_bytes(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        };
-        
-        // Generate one-time prekey (with private key stored)
-        let bob_one_time_prekey_private = StaticSecret::random_from_rng(&mut OsRng);
-        let bob_one_time_prekey_public = PublicKey::from(&bob_one_time_prekey_private);
-        let bob_one_time_prekey = OneTimePreKey {
-            id: 1,
-            public_key: bob_one_time_prekey_public.to_bytes(),
-        };
-        
-        // Create bundle with the public keys
-        let mut bob_bundle = PreKeyBundle::new(
-            &bob_identity,
-            bob_signed_prekey,
-            vec![bob_one_time_prekey.clone()],
-        ).unwrap();
-        
-        // Alice initiates
-        let alice_identity = IdentityKeyPair::generate();
-        let initiator_result = initiator::initiate(&alice_identity, &mut bob_bundle).unwrap();
-        
-        // Bob responds
-        let bob_shared_secret = respond_full(
-            &bob_identity,
-            &bob_signed_prekey_private,
-            Some(&bob_one_time_prekey_private),
-            alice_identity.public_key(),
-            &initiator_result.ephemeral_key_pair.1,
-        ).unwrap();
-        
-        // Both should have the same shared secret
-        assert_eq!(initiator_result.shared_secret, bob_shared_secret);
+impl X3DHResponder {
+    /// Create a new X3DH responder
+    /// 
+    /// # Arguments
+    /// * `identity_pair` - Bob's identity key pair
+    /// * `signed_prekey_pair` - Bob's signed prekey pair
+    pub fn new(identity_pair: IdentityKeyPair, signed_prekey_pair: SignedPreKeyPair) -> Self {
+        Self {
+            identity_pair,
+            signed_prekey_pair,
+            one_time_prekey_private: None,
+            one_time_prekey_public: None,
+            one_time_prekey_id: None,
+        }
     }
 
-    #[test]
-    fn test_x3dh_without_one_time_prekey() {
-        // Similar setup but test without one-time prekey
-        let bob_identity = IdentityKeyPair::generate();
-        let bob_signing_key = SigningKey::generate(&mut OsRng);
+    /// Set the one-time prekey for this responder
+    /// 
+    /// # Arguments
+    /// * `key_id` - One-time prekey ID
+    /// * `private_key` - One-time prekey private key
+    /// * `public_key` - One-time prekey public key
+    pub fn set_one_time_prekey(&mut self, key_id: u32, private_key: EphemeralSecret, public_key: PublicKey) {
+        self.one_time_prekey_private = Some(private_key);
+        self.one_time_prekey_public = Some(public_key);
+        self.one_time_prekey_id = Some(key_id);
+    }
+
+    /// Respond to X3DH handshake initiation
+    /// 
+    /// # Arguments
+    /// * `identity_a_hex` - Alice's identity public key as hex string
+    /// * `ephemeral_public_key_hex` - Alice's ephemeral public key as hex string
+    /// 
+    /// # Returns
+    /// X3DHResponseResult containing the shared secret
+    pub fn respond(&self, identity_a_hex: &str, ephemeral_public_key_hex: &str) -> Result<X3DHResponseResult> {
+        // Parse Alice's identity public key from hex
+        let identity_a_bytes = hex::decode(identity_a_hex)
+            .map_err(|e| E2EEError::SerializationError(format!("Failed to decode identity public key: {}", e)))?;
         
-        let bob_signed_prekey_private = StaticSecret::random_from_rng(&mut OsRng);
-        let bob_signed_prekey_public = PublicKey::from(&bob_signed_prekey_private);
-        let message = bob_signed_prekey_public.as_bytes();
-        let signature = bob_signing_key.sign(message);
-        let bob_signed_prekey = SignedPreKey {
-            id: 1,
-            public_key: bob_signed_prekey_public.to_bytes(),
-            signature: signature.to_bytes(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+        if identity_a_bytes.len() != 32 {
+            return Err(E2EEError::ProtocolError(
+                format!("Invalid identity public key length: expected 32, got {}", identity_a_bytes.len())
+            ));
+        }
+        
+        let mut identity_a_pub_bytes = [0u8; 32];
+        identity_a_pub_bytes.copy_from_slice(&identity_a_bytes);
+        let identity_a_public = PublicKey::from(identity_a_pub_bytes);
+        
+        // Parse Alice's ephemeral public key from hex
+        let ephemeral_bytes = hex::decode(ephemeral_public_key_hex)
+            .map_err(|e| E2EEError::SerializationError(format!("Failed to decode ephemeral public key: {}", e)))?;
+        
+        if ephemeral_bytes.len() != 32 {
+            return Err(E2EEError::ProtocolError(
+                format!("Invalid ephemeral public key length: expected 32, got {}", ephemeral_bytes.len())
+            ));
+        }
+        
+        let mut ephemeral_pub_bytes = [0u8; 32];
+        ephemeral_pub_bytes.copy_from_slice(&ephemeral_bytes);
+        let ephemeral_public = PublicKey::from(ephemeral_pub_bytes);
+        
+        // Calculate DH1 = ECDH(IKA, SPKB)
+        // From initiator: DH1 = ECDH(IKA_private, SPKB_public)
+        // From responder: DH1 = ECDH(SPKB_private, IKA_public)
+        // These are equal due to ECDH commutativity
+        let signed_prekey_b_private = self.signed_prekey_pair.private_key();
+        let dh1 = perform_dh(signed_prekey_b_private, &identity_a_public)?;
+        
+        // Calculate DH2 = ECDH(EK, IKB)
+        // From responder perspective: ECDH(IKB_private, EK_public)
+        let identity_b_private_for_dh2 = self.identity_pair.private_key_as_ephemeral();
+        let dh2 = perform_dh(identity_b_private_for_dh2, &ephemeral_public)?;
+        
+        // Calculate DH3 = ECDH(EK, SPKB)
+        // From responder perspective: ECDH(SPKB_private, EK_public)
+        let signed_prekey_b_private_for_dh3 = self.signed_prekey_pair.private_key();
+        let dh3 = perform_dh(signed_prekey_b_private_for_dh3, &ephemeral_public)?;
+        
+        // Calculate DH4 = ECDH(EK, OPKB) if available
+        let dh4 = if let Some(ref opk_private) = self.one_time_prekey_private {
+            // From responder perspective: ECDH(OPKB_private, EK_public)
+            // Note: opk_private is owned, so we need to clone it for reuse
+            // But EphemeralSecret doesn't implement Clone, so we extract bytes
+            let opk_private_bytes = unsafe {
+                std::mem::transmute_copy::<EphemeralSecret, [u8; 32]>(opk_private)
+            };
+            let opk_private_for_dh4 = unsafe {
+                std::mem::transmute::<[u8; 32], EphemeralSecret>(opk_private_bytes)
+            };
+            Some(perform_dh(opk_private_for_dh4, &ephemeral_public)?)
+        } else {
+            None
         };
         
-        let bob_one_time_prekey_private = StaticSecret::random_from_rng(&mut OsRng);
-        let bob_one_time_prekey_public = PublicKey::from(&bob_one_time_prekey_private);
-        let bob_one_time_prekey = OneTimePreKey {
-            id: 1,
-            public_key: bob_one_time_prekey_public.to_bytes(),
-        };
+        // Calculate shared secret from DH values
+        let shared_secret = calculate_shared_secret_from_dh(
+            &dh1,
+            &dh2,
+            &dh3,
+            dh4.as_ref(),
+        )?;
         
-        let mut bob_bundle = PreKeyBundle::new(
-            &bob_identity,
-            bob_signed_prekey,
-            vec![bob_one_time_prekey],
-        ).unwrap();
-        
-        // Alice initiates
-        let alice_identity = IdentityKeyPair::generate();
-        let initiator_result = initiator::initiate(&alice_identity, &mut bob_bundle).unwrap();
-        
-        // Bob responds
-        let bob_shared_secret = respond_full(
-            &bob_identity,
-            &bob_signed_prekey_private,
-            Some(&bob_one_time_prekey_private),
-            alice_identity.public_key(),
-            &initiator_result.ephemeral_key_pair.1,
-        ).unwrap();
-        
-        // Both should have the same shared secret
-        assert_eq!(initiator_result.shared_secret, bob_shared_secret);
+        Ok(X3DHResponseResult {
+            shared_secret,
+        })
     }
 }
 

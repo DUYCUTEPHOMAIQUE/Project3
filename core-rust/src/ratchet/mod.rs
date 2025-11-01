@@ -1,5 +1,6 @@
-//! Double Ratchet module (MVP)
-
+pub mod chain;
 pub mod double_ratchet;
 
-pub use double_ratchet::*;
+pub use chain::Chain;
+pub use double_ratchet::DoubleRatchet;
+

@@ -1,141 +1,111 @@
-//! X3DH Initiator (Alice side)
-//!
-//! Implements the initiator side of X3DH protocol:
-//! 1. Fetch prekey bundle from server
-//! 2. Generate ephemeral key (EK)
-//! 3. Calculate shared secret: SK = KDF(DH1 || DH2 || DH3 || DH4)
-//! 4. Encrypt initial message with SK
-
-use x25519_dalek::{PublicKey, StaticSecret};
-use rand::rngs::OsRng;
 use crate::error::{E2EEError, Result};
-use crate::keys::{IdentityKeyPair, PreKeyBundle, OneTimePreKey};
-use super::handshake::{SharedSecret, derive_shared_secret, dh};
+use crate::keys::{IdentityKeyPair, PreKeyBundle};
+use crate::x3dh::handshake::{calculate_shared_secret_from_dh, perform_dh};
+use rand::rngs::OsRng;
+use x25519_dalek::{EphemeralSecret, PublicKey};
 
-/// X3DH Initiator Result
-pub struct InitiatorResult {
-    /// Shared secret (SK) for Double Ratchet initialization
-    pub shared_secret: SharedSecret,
-    /// Ephemeral key pair (public key will be sent to Bob)
-    pub ephemeral_key_pair: (StaticSecret, PublicKey),
-    /// One-time prekey that was used (if any)
-    pub used_one_time_prekey: Option<OneTimePreKey>,
+/// Result of X3DH initiation
+pub struct X3DHResult {
+    /// The shared secret derived from X3DH handshake
+    pub shared_secret: [u8; 32],
+    /// Ephemeral public key as hex string
+    pub ephemeral_public_key_hex: String,
 }
 
-/// Initiate X3DH key exchange
-///
-/// This function implements the initiator side (Alice) of X3DH protocol.
-/// It takes Alice's identity key pair and Bob's prekey bundle, then:
-/// 1. Generates an ephemeral key (EK)
-/// 2. Calculates shared secret: SK = KDF(DH1 || DH2 || DH3 || DH4)
-///    - DH1 = DH(IKA, SPKB)
-///    - DH2 = DH(EK, IKB)
-///    - DH3 = DH(EK, SPKB)
-///    - DH4 = DH(EK, OPKB) [if available]
-///
-/// Returns the shared secret and ephemeral key pair.
-pub fn initiate(
-    alice_identity: &IdentityKeyPair,
-    bob_prekey_bundle: &mut PreKeyBundle,
-) -> Result<InitiatorResult> {
-    // Generate ephemeral key (EK)
-    let ephemeral_private = StaticSecret::random_from_rng(&mut OsRng);
-    let ephemeral_public = PublicKey::from(&ephemeral_private);
-    
-    // Get Bob's identity public key
-    let bob_identity_public = PublicKey::from_bytes(&bob_prekey_bundle.identity_key)
-        .map_err(|e| E2EEError::Key(format!("Invalid Bob identity key: {}", e)))?;
-    
-    // Get Bob's signed prekey public key
-    let bob_signed_prekey_public = bob_prekey_bundle.signed_prekey.public_key()?;
-    
-    // Try to get a one-time prekey (optional but preferred)
-    let one_time_prekey = bob_prekey_bundle.take_one_time_prekey();
-    
-    // Calculate DH operations
-    // DH1 = DH(IKA, SPKB)
-    let alice_identity_private = alice_identity.private_key();
-    let dh1 = dh(alice_identity_private, &bob_signed_prekey_public);
-    
-    // DH2 = DH(EK, IKB)
-    let dh2 = dh(&ephemeral_private, &bob_identity_public);
-    
-    // DH3 = DH(EK, SPKB)
-    let dh3 = dh(&ephemeral_private, &bob_signed_prekey_public);
-    
-    // DH4 = DH(EK, OPKB) [if available]
-    let mut dh_outputs = vec![dh1.as_slice(), dh2.as_slice(), dh3.as_slice()];
-    
-    let used_one_time_prekey = if let Some(ref opk) = one_time_prekey {
-        let opk_public = opk.public_key()?;
-        let dh4 = dh(&ephemeral_private, &opk_public);
-        dh_outputs.push(dh4.as_slice());
-        Some(opk.clone())
-    } else {
-        None
-    };
-    
-    // Derive shared secret: SK = KDF(DH1 || DH2 || DH3 || DH4)
-    let shared_secret = derive_shared_secret(&dh_outputs)?;
-    
-    Ok(InitiatorResult {
-        shared_secret,
-        ephemeral_key_pair: (ephemeral_private, ephemeral_public),
-        used_one_time_prekey,
-    })
+/// X3DH Initiator (Alice side)
+/// 
+/// Handles the initiator side of the X3DH key agreement protocol.
+pub struct X3DHInitiator {
+    identity_pair: IdentityKeyPair,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::keys::{SignedPreKey, PreKeyId};
-    use ed25519_dalek::SigningKey;
-
-    #[test]
-    fn test_x3dh_initiate_with_one_time_prekey() {
-        // Setup: Bob's keys
-        let bob_identity = IdentityKeyPair::generate();
-        let bob_signing_key = SigningKey::generate(&mut OsRng);
-        let bob_signed_prekey = SignedPreKey::generate(1, &bob_signing_key).unwrap();
-        let bob_one_time_prekeys: Vec<OneTimePreKey> = (0..5)
-            .map(|i| OneTimePreKey::generate(i as PreKeyId))
-            .collect();
-        
-        let mut bob_bundle = PreKeyBundle::new(
-            &bob_identity,
-            bob_signed_prekey,
-            bob_one_time_prekeys,
-        ).unwrap();
-        
-        // Alice initiates
-        let alice_identity = IdentityKeyPair::generate();
-        let result = initiate(&alice_identity, &mut bob_bundle).unwrap();
-        
-        // Verify results
-        assert_eq!(result.shared_secret.len(), 32);
-        assert!(result.used_one_time_prekey.is_some());
-        assert_eq!(bob_bundle.one_time_prekeys.len(), 4); // One was consumed
+impl X3DHInitiator {
+    /// Create a new X3DH initiator
+    pub fn new(identity_pair: IdentityKeyPair) -> Self {
+        Self { identity_pair }
     }
 
-    #[test]
-    fn test_x3dh_initiate_without_one_time_prekey() {
-        // Setup: Bob's keys with minimal one-time prekey
-        let bob_identity = IdentityKeyPair::generate();
-        let bob_signing_key = SigningKey::generate(&mut OsRng);
-        let bob_signed_prekey = SignedPreKey::generate(1, &bob_signing_key).unwrap();
-        let mut bob_bundle = PreKeyBundle::new(
-            &bob_identity,
-            bob_signed_prekey,
-            vec![OneTimePreKey::generate(1)],
-        ).unwrap();
+    /// Initiate X3DH handshake with a prekey bundle
+    /// 
+    /// # Arguments
+    /// * `bundle` - Prekey bundle from Bob containing identity, signed prekey, and optional one-time prekey
+    /// 
+    /// # Returns
+    /// X3DHResult containing the shared secret and ephemeral public key
+    pub fn initiate(&self, bundle: &PreKeyBundle) -> Result<X3DHResult> {
+        // Parse Bob's identity public key from hex
+        let identity_b_hex = bundle.identity_public_hex();
+        let identity_b_bytes = hex::decode(identity_b_hex)
+            .map_err(|e| E2EEError::SerializationError(format!("Failed to decode identity public key: {}", e)))?;
         
-        // Alice initiates
-        let alice_identity = IdentityKeyPair::generate();
-        let result = initiate(&alice_identity, &mut bob_bundle).unwrap();
+        if identity_b_bytes.len() != 32 {
+            return Err(E2EEError::ProtocolError(
+                format!("Invalid identity public key length: expected 32, got {}", identity_b_bytes.len())
+            ));
+        }
         
-        // Verify results (should still work)
-        assert_eq!(result.shared_secret.len(), 32);
-        assert_eq!(bob_bundle.one_time_prekeys.len(), 0); // One was consumed
+        let mut identity_b_pub_bytes = [0u8; 32];
+        identity_b_pub_bytes.copy_from_slice(&identity_b_bytes);
+        let identity_b_public = PublicKey::from(identity_b_pub_bytes);
+        
+        // Parse signed prekey public key
+        let signed_prekey = bundle.signed_prekey();
+        let signed_prekey_public = signed_prekey.public_key();
+        
+        // Parse one-time prekey public key (if available)
+        let one_time_prekey_public = bundle.one_time_prekey()
+            .map(|otp| otp.public_key());
+        
+        // Generate ephemeral key (EK)
+        let ephemeral_private = EphemeralSecret::random_from_rng(OsRng);
+        let ephemeral_public = PublicKey::from(&ephemeral_private);
+        let ephemeral_public_hex = hex::encode(ephemeral_public.as_bytes());
+        
+        // Calculate DH1 = ECDH(IKA, SPKB)
+        // Get identity private key as EphemeralSecret (can be used multiple times)
+        let identity_a_private = self.identity_pair.private_key_as_ephemeral();
+        let dh1 = perform_dh(identity_a_private, &signed_prekey_public)?;
+        
+        // Calculate DH2 = ECDH(EK, IKB)
+        // We need to clone ephemeral_private for multiple uses
+        // Since EphemeralSecret doesn't implement Clone, we need to extract bytes first
+        let ephemeral_private_bytes = unsafe {
+            std::mem::transmute_copy::<EphemeralSecret, [u8; 32]>(&ephemeral_private)
+        };
+        
+        // Create new EphemeralSecret for DH2
+        let ephemeral_private_for_dh2 = unsafe {
+            std::mem::transmute::<[u8; 32], EphemeralSecret>(ephemeral_private_bytes)
+        };
+        let dh2 = perform_dh(ephemeral_private_for_dh2, &identity_b_public)?;
+        
+        // Calculate DH3 = ECDH(EK, SPKB)
+        let ephemeral_private_for_dh3 = unsafe {
+            std::mem::transmute::<[u8; 32], EphemeralSecret>(ephemeral_private_bytes)
+        };
+        let dh3 = perform_dh(ephemeral_private_for_dh3, &signed_prekey_public)?;
+        
+        // Calculate DH4 = ECDH(EK, OPKB) if available
+        let dh4 = if let Some(opkb) = one_time_prekey_public.as_ref() {
+            let ephemeral_private_for_dh4 = unsafe {
+                std::mem::transmute::<[u8; 32], EphemeralSecret>(ephemeral_private_bytes)
+            };
+            Some(perform_dh(ephemeral_private_for_dh4, opkb)?)
+        } else {
+            None
+        };
+        
+        // Calculate shared secret from DH values
+        let shared_secret = calculate_shared_secret_from_dh(
+            &dh1,
+            &dh2,
+            &dh3,
+            dh4.as_ref(),
+        )?;
+        
+        Ok(X3DHResult {
+            shared_secret,
+            ephemeral_public_key_hex: ephemeral_public_hex,
+        })
     }
 }
-

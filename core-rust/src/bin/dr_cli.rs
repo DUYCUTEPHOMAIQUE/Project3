@@ -36,7 +36,8 @@ fn main() {
     match cmd.as_str() {
         "encrypt" => {
             // stdin is plaintext
-            let mut dr = DoubleRatchet::from_shared_secret(&sk).expect("dr init");
+            // Use is_initiator=true for encrypt (simplified)
+            let mut dr = DoubleRatchet::from_shared_secret(&sk, true).expect("dr init");
             let env = dr.encrypt_envelope(&buf).expect("encrypt");
             let b64 = env.to_base64().expect("b64");
             println!("{}", b64);
@@ -50,7 +51,8 @@ fn main() {
                     std::process::exit(3);
                 }
             };
-            let mut dr = DoubleRatchet::from_shared_secret(&sk).expect("dr init");
+            // Use is_initiator=false for decrypt (simplified)
+            let mut dr = DoubleRatchet::from_shared_secret(&sk, false).expect("dr init");
             let pt = dr.decrypt_envelope(&env).expect("decrypt");
             io::stdout().write_all(&pt).expect("write out");
         }

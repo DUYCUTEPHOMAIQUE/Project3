@@ -1,3 +1,4 @@
 pub mod envelope;
 
-pub use envelope::*;
+pub use envelope::{MessageEnvelope, MessageHeader, MessageType};
+
