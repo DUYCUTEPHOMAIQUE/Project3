@@ -1,0 +1,25 @@
+# Flutter Rust Bridge codegen configuration
+
+rust:
+  # Path to Rust crate
+  crate: "."
+
+dart:
+  # Output directory for generated Dart code
+  out: "../demo-app/lib/bridge_generated"
+  
+  # Output file name
+  out_file_name: "bridge_generated.dart"
+  
+  # Rust file that contains the API definitions
+  rust_input_path: "src/ffi/api.rs"
+  
+  # Class name for the generated Dart API class
+  class_name: "E2EECore"
+  
+  # Enable async support
+  async: true
+  
+  # Code comments style
+  comments_style: "auto"
+

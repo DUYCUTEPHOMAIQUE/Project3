@@ -3,6 +3,7 @@ use crate::message::MessageEnvelope;
 use crate::ratchet::chain::Chain;
 use rand::rngs::OsRng;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
+use ring::hmac;
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
 /// Double Ratchet for forward secrecy and break-in recovery
@@ -73,22 +74,23 @@ impl DoubleRatchet {
         // Ratchet sending chain forward to get message key
         let (message_key, _) = self.sending_chain.ratchet_forward()?;
         
-        // Encrypt plaintext with message key using ChaCha20-Poly1305
-        let ciphertext = Self::encrypt_with_key(&message_key, plaintext)?;
+        // Increment sending message number (must be done before encryption to use correct nonce)
+        self.sending_message_number += 1;
+        let message_number = self.sending_message_number;
+        
+        // Encrypt plaintext with message key using AES-256-GCM with message-number-based nonce
+        let ciphertext = Self::encrypt_with_key(&message_key, plaintext, message_number)?;
         
         // Get DH public key for header
         let dh_public = PublicKey::from(&self.dh_key_pair);
         let dh_public_hex = hex::encode(dh_public.as_bytes());
-        
-        // Increment sending message number
-        self.sending_message_number += 1;
         
         // Create message envelope
         let envelope = MessageEnvelope::regular(
             ciphertext,
             dh_public_hex,
             0, // previous_chain_length (simplified for now)
-            self.sending_message_number,
+            message_number,
         );
         
         Ok(envelope)
@@ -148,8 +150,11 @@ impl DoubleRatchet {
         // Ratchet receiving chain forward to get message key
         let (message_key, _) = receiving_chain.ratchet_forward()?;
         
-        // Decrypt ciphertext with message key
-        let plaintext = Self::decrypt_with_key(&message_key, &envelope.ciphertext)?;
+        // Get message number from envelope for nonce generation
+        let message_number = envelope.header.message_number;
+        
+        // Decrypt ciphertext with message key using message-number-based nonce
+        let plaintext = Self::decrypt_with_key(&message_key, &envelope.ciphertext, message_number)?;
         
         Ok(plaintext)
     }
@@ -202,9 +207,14 @@ impl DoubleRatchet {
 
     /// Encrypt plaintext with message key using AES-256-GCM
     /// 
-    /// Note: This uses a simplified nonce (all zeros). In production, you should
-    /// use a proper nonce sequence derived from message number or chain state.
-    fn encrypt_with_key(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>> {
+    /// Uses message number to derive a unique nonce for each message.
+    /// The nonce is derived using HKDF from the message key and message number.
+    /// 
+    /// # Arguments
+    /// * `key` - Message key (32 bytes)
+    /// * `plaintext` - Plaintext to encrypt
+    /// * `message_number` - Message number in the chain (for nonce generation)
+    fn encrypt_with_key(key: &[u8; 32], plaintext: &[u8], message_number: u64) -> Result<Vec<u8>> {
         // Create unbound key
         let unbound_key = UnboundKey::new(&AES_256_GCM, key)
             .map_err(|e| E2EEError::CryptoError(format!("Failed to create key: {}", e)))?;
@@ -212,9 +222,9 @@ impl DoubleRatchet {
         // Create less safe key (for deterministic nonce usage)
         let less_safe_key = LessSafeKey::new(unbound_key);
         
-        // Create nonce (12 bytes for AES-GCM)
-        // Simplified: using all zeros. In production, derive from message number
-        let nonce_bytes = [0u8; 12];
+        // Derive nonce from message key and message number using HKDF
+        // This ensures each message has a unique nonce
+        let nonce_bytes = Self::derive_nonce(key, message_number)?;
         let nonce = Nonce::assume_unique_for_key(nonce_bytes);
         
         // Encrypt
@@ -227,10 +237,14 @@ impl DoubleRatchet {
 
     /// Decrypt ciphertext with message key using AES-256-GCM
     /// 
-    /// Note: This uses a simplified nonce (all zeros). In production, you should
-    /// use a proper nonce sequence derived from message number or chain state.
-    /// The nonce must match the one used during encryption.
-    fn decrypt_with_key(key: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    /// Uses message number to derive the same nonce that was used during encryption.
+    /// The nonce is derived using HKDF from the message key and message number.
+    /// 
+    /// # Arguments
+    /// * `key` - Message key (32 bytes)
+    /// * `ciphertext` - Ciphertext to decrypt
+    /// * `message_number` - Message number in the chain (must match encryption)
+    fn decrypt_with_key(key: &[u8; 32], ciphertext: &[u8], message_number: u64) -> Result<Vec<u8>> {
         // Create unbound key
         let unbound_key = UnboundKey::new(&AES_256_GCM, key)
             .map_err(|e| E2EEError::CryptoError(format!("Failed to create key: {}", e)))?;
@@ -238,9 +252,9 @@ impl DoubleRatchet {
         // Create less safe key (for deterministic nonce usage)
         let less_safe_key = LessSafeKey::new(unbound_key);
         
-        // Create nonce (12 bytes for AES-GCM)
+        // Derive nonce from message key and message number using HKDF
         // Must match the nonce used during encryption
-        let nonce_bytes = [0u8; 12];
+        let nonce_bytes = Self::derive_nonce(key, message_number)?;
         let nonce = Nonce::assume_unique_for_key(nonce_bytes);
         
         // Decrypt
@@ -251,6 +265,34 @@ impl DoubleRatchet {
         
         plaintext.truncate(plaintext_len);
         Ok(plaintext)
+    }
+
+    /// Derive nonce from message key and message number using HMAC-SHA256
+    /// 
+    /// This ensures each message has a unique, deterministic nonce.
+    /// The nonce is derived using HMAC-SHA256 from the message key and message number.
+    /// This is secure because each message uses a different message key (from chain ratchet).
+    /// 
+    /// # Arguments
+    /// * `message_key` - Message key (32 bytes)
+    /// * `message_number` - Message number in the chain
+    /// 
+    /// # Returns
+    /// 12-byte nonce for AES-GCM
+    fn derive_nonce(message_key: &[u8; 32], message_number: u64) -> Result<[u8; 12]> {
+        // Encode message number as bytes (little-endian, 8 bytes)
+        let message_number_bytes = message_number.to_le_bytes();
+        
+        // Use HMAC-SHA256 to derive nonce from message key and message number
+        // This is secure and deterministic: same key + same number = same nonce
+        let key = hmac::Key::new(hmac::HMAC_SHA256, message_key);
+        let tag = hmac::sign(&key, &message_number_bytes);
+        
+        // Take first 12 bytes from HMAC output for nonce (HMAC-SHA256 produces 32 bytes)
+        let mut nonce = [0u8; 12];
+        nonce.copy_from_slice(&tag.as_ref()[..12]);
+        
+        Ok(nonce)
     }
 }
 

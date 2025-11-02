@@ -10,7 +10,7 @@ use e2ee_core::keys::{IdentityKeyPair, PreKeyBundle};
 use e2ee_core::keys::prekey::{OneTimePreKey, OneTimePreKeyPair, SignedPreKey, SignedPreKeyPair};
 use e2ee_core::message::MessageEnvelope;
 use e2ee_core::ratchet::DoubleRatchet;
-use e2ee_core::x3dh::{X3DHInitiator, X3DHResult, X3DHResponder, X3DHResponseResult};
+use e2ee_core::x3dh::{X3DHInitiator, X3DHResponder};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,10 +44,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Step 3: Creating prekey bundle...");
     let prekey_bundle = PreKeyBundle::new(
         bob_identity.public_key_hex(),
+        bob_identity.verifying_key(),
         SignedPreKey::from(&bob_signed_prekey),
         Some(OneTimePreKey::from(&bob_one_time_prekey)),
     );
-    println!("  Prekey bundle created successfully");
+    
+    // Verify signature to ensure prekey is valid
+    if prekey_bundle.verify_signature()? {
+        println!("  ✓ Prekey bundle signature verified successfully");
+    } else {
+        println!("  ✗ Prekey bundle signature verification failed!");
+        return Err("Prekey bundle signature verification failed".into());
+    }
     println!();
 
     // ============================================================

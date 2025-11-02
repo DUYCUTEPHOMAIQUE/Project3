@@ -1,0 +1,13 @@
+# Flutter Rust Bridge codegen configuration for demo-app
+
+rust:
+  crate: "../core-rust"
+  rust_src_path: "../core-rust/src"
+
+dart:
+  out: "lib/bridge_generated"
+  out_file_name: "bridge_generated.dart"
+  rust_input_path: "src/ffi/api.rs"
+  class_name: "E2EECore"
+  async: true
+

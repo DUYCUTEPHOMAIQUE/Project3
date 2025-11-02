@@ -87,3 +87,5 @@ secrets/
 # *.pb.rs
 # *.pb.ts
 
+# FVM Version Cache
+.fvm/

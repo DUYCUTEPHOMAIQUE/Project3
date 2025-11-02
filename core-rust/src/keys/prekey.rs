@@ -1,8 +1,7 @@
 use crate::error::{E2EEError, Result};
 use crate::keys::identity::IdentityKeyPair;
-use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer, Verifier, SecretKey};
+use ed25519_dalek::{VerifyingKey, Signature, Signer, Verifier};
 use rand::rngs::OsRng;
-use rand::RngCore;
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
 /// Signed prekey pair with Ed25519 signature
@@ -23,24 +22,14 @@ impl SignedPreKeyPair {
     /// # Arguments
     /// * `key_id` - Unique identifier for this prekey
     /// * `identity_pair` - Identity key pair to sign the prekey
-    pub fn generate(key_id: u32, _identity_pair: &IdentityKeyPair) -> Result<Self> {
+    pub fn generate(key_id: u32, identity_pair: &IdentityKeyPair) -> Result<Self> {
         // Generate new X25519 prekey pair
         let prekey = EphemeralSecret::random_from_rng(OsRng);
         let prekey_public = PublicKey::from(&prekey);
         
-        // Sign the prekey public key with Ed25519 identity key
-        // We need to convert X25519 to Ed25519 or use a separate signing key
-        // For now, we'll use Ed25519 for signing (identity key needs Ed25519 variant)
-        // This requires identity key to have Ed25519 signing capability
-        
-        // Generate Ed25519 secret key from randomness (32 bytes)
-        let mut secret_bytes = [0u8; 32];
-        OsRng.fill_bytes(&mut secret_bytes);
-        let secret_key: SecretKey = secret_bytes.into();
-        
-        // Create Ed25519 signing key from secret key
-        let signing_key = SigningKey::from_bytes(&secret_key);
+        // Sign the prekey public key with Ed25519 identity signing key
         let prekey_pub_bytes = prekey_public.as_bytes();
+        let signing_key = identity_pair.signing_key();
         
         // Sign the prekey public key
         let signature = signing_key.sign(prekey_pub_bytes);
@@ -204,6 +193,15 @@ impl SignedPreKey {
         }
     }
 
+    /// Create from components (for deserialization)
+    pub fn from_components(public_key: PublicKey, signature: Signature, key_id: u32) -> Self {
+        Self {
+            public_key,
+            signature,
+            key_id,
+        }
+    }
+
     /// Get the public key
     pub fn public_key(&self) -> &PublicKey {
         &self.public_key
@@ -223,6 +221,15 @@ impl SignedPreKey {
     pub fn key_id(&self) -> u32 {
         self.key_id
     }
+
+    /// Verify the signature of this prekey
+    pub fn verify_signature(&self, identity_public: &VerifyingKey) -> Result<bool> {
+        let prekey_pub_bytes = self.public_key.as_bytes();
+        identity_public
+            .verify(prekey_pub_bytes, &self.signature)
+            .map_err(|e| E2EEError::CryptoError(format!("Signature verification failed: {}", e)))?;
+        Ok(true)
+    }
 }
 
 /// Public representation of a one-time prekey
@@ -237,6 +244,14 @@ impl OneTimePreKey {
         Self {
             public_key: key_pair.public_key,
             key_id: key_pair.key_id,
+        }
+    }
+
+    /// Create from components (for deserialization)
+    pub fn from_components(public_key: PublicKey, key_id: u32) -> Self {
+        Self {
+            public_key,
+            key_id,
         }
     }
 
@@ -259,6 +274,7 @@ impl OneTimePreKey {
 /// Prekey bundle containing identity key, signed prekey, and optional one-time prekey
 pub struct PreKeyBundle {
     identity_public_hex: String,
+    identity_ed25519_verifying_key: VerifyingKey, // Ed25519 verifying key for signature verification
     signed_prekey: SignedPreKey,
     one_time_prekey: Option<OneTimePreKey>,
 }
@@ -267,24 +283,40 @@ impl PreKeyBundle {
     /// Create a new prekey bundle
     /// 
     /// # Arguments
-    /// * `identity_public_hex` - Identity public key as hex string
+    /// * `identity_public_hex` - Identity public key (X25519) as hex string
+    /// * `identity_ed25519_verifying_key` - Identity Ed25519 verifying key for signature verification
     /// * `signed_prekey` - Signed prekey
     /// * `one_time_prekey` - Optional one-time prekey
     pub fn new(
         identity_public_hex: String,
+        identity_ed25519_verifying_key: VerifyingKey,
         signed_prekey: SignedPreKey,
         one_time_prekey: Option<OneTimePreKey>,
     ) -> Self {
         Self {
             identity_public_hex,
+            identity_ed25519_verifying_key,
             signed_prekey,
             one_time_prekey,
         }
     }
 
+    /// Verify the signature of the signed prekey using the identity's Ed25519 verifying key
+    /// 
+    /// # Returns
+    /// Ok(true) if signature is valid, Err otherwise
+    pub fn verify_signature(&self) -> Result<bool> {
+        self.signed_prekey.verify_signature(&self.identity_ed25519_verifying_key)
+    }
+
     /// Get the identity public key as hex
     pub fn identity_public_hex(&self) -> &str {
         &self.identity_public_hex
+    }
+
+    /// Get the identity Ed25519 verifying key
+    pub fn identity_ed25519_verifying_key(&self) -> &VerifyingKey {
+        &self.identity_ed25519_verifying_key
     }
 
     /// Get the signed prekey

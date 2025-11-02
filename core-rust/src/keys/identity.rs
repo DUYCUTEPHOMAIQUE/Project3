@@ -1,22 +1,29 @@
 use rand::rngs::OsRng;
+use rand::RngCore;
 use x25519_dalek::{EphemeralSecret, PublicKey};
+use ed25519_dalek::{SigningKey, VerifyingKey, SecretKey};
 
 /// Identity key pair for X3DH protocol
 /// 
-/// Uses X25519 for key exchange. The private key is kept secret
-/// and never exposed outside this struct.
+/// Uses X25519 for key exchange and Ed25519 for signing.
+/// The private keys are kept secret and never exposed outside this struct.
 /// 
-/// Stores the private key as raw bytes to allow reuse and cloning.
+/// Stores the private keys as raw bytes to allow reuse and cloning.
 pub struct IdentityKeyPair {
+    // X25519 keys for key exchange
     private_key_bytes: [u8; 32],
     public_key: PublicKey,
+    // Ed25519 keys for signing
+    ed25519_signing_key: SigningKey,
 }
 
 impl IdentityKeyPair {
     /// Generate a new identity key pair
     /// 
+    /// Generates both X25519 (for key exchange) and Ed25519 (for signing) key pairs.
     /// Uses `OsRng` for cryptographically secure random number generation.
     pub fn generate() -> Self {
+        // Generate X25519 key pair for key exchange
         let private_key = EphemeralSecret::random_from_rng(OsRng);
         let public_key = PublicKey::from(&private_key);
         
@@ -32,9 +39,17 @@ impl IdentityKeyPair {
         // Zeroize the original EphemeralSecret by dropping it
         drop(private_key);
         
+        // Generate Ed25519 key pair for signing
+        // We use a different random seed to ensure independence
+        let mut ed25519_secret_bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut ed25519_secret_bytes);
+        let ed25519_secret_key: SecretKey = ed25519_secret_bytes.into();
+        let ed25519_signing_key = SigningKey::from_bytes(&ed25519_secret_key);
+        
         Self {
             private_key_bytes,
             public_key,
+            ed25519_signing_key,
         }
     }
 
@@ -74,14 +89,84 @@ impl IdentityKeyPair {
     pub(crate) fn private_key_bytes(&self) -> [u8; 32] {
         self.private_key_bytes
     }
+
+    /// Get the Ed25519 signing key for signing operations
+    /// 
+    /// Returns a reference to the signing key that can be used to sign data.
+    pub(crate) fn signing_key(&self) -> &SigningKey {
+        &self.ed25519_signing_key
+    }
+
+    /// Get the Ed25519 verifying key (public key) for signature verification
+    /// 
+    /// Returns the verifying key that corresponds to the signing key.
+    pub fn verifying_key(&self) -> VerifyingKey {
+        self.ed25519_signing_key.verifying_key()
+    }
+
+    /// Create IdentityKeyPair from bytes (for deserialization)
+    /// 
+    /// # Arguments
+    /// * `x25519_private_key` - X25519 private key bytes (32 bytes)
+    /// * `x25519_public_key` - X25519 public key bytes (32 bytes)
+    /// * `ed25519_private_key` - Ed25519 private key bytes (32 bytes)
+    /// * `ed25519_public_key` - Ed25519 public key bytes (32 bytes)
+    /// 
+    /// # Returns
+    /// IdentityKeyPair if keys are valid, Err otherwise
+    pub fn from_bytes(
+        x25519_private_key: [u8; 32],
+        x25519_public_key: [u8; 32],
+        ed25519_private_key: [u8; 32],
+        ed25519_public_key: [u8; 32],
+    ) -> crate::error::Result<Self> {
+        use crate::error::E2EEError;
+        
+        // Reconstruct X25519 keys
+        let x25519_private = unsafe {
+            std::mem::transmute::<[u8; 32], EphemeralSecret>(x25519_private_key)
+        };
+        let x25519_public = PublicKey::from(&x25519_private);
+        
+        // Validate public key matches
+        if x25519_public_key != *x25519_public.as_bytes() {
+            return Err(E2EEError::SerializationError(
+                "X25519 public key mismatch".to_string()
+            ));
+        }
+        
+        // Reconstruct Ed25519 keys
+        let ed25519_secret_key: SecretKey = ed25519_private_key.into();
+        let ed25519_signing_key = SigningKey::from_bytes(&ed25519_secret_key);
+        let ed25519_verifying_key = ed25519_signing_key.verifying_key();
+        
+        // Validate public key matches
+        if ed25519_public_key != ed25519_verifying_key.to_bytes() {
+            return Err(E2EEError::SerializationError(
+                "Ed25519 public key mismatch".to_string()
+            ));
+        }
+        
+        Ok(Self {
+            private_key_bytes: x25519_private_key,
+            public_key: x25519_public,
+            ed25519_signing_key,
+        })
+    }
 }
 
 impl Clone for IdentityKeyPair {
     fn clone(&self) -> Self {
         // We can clone because we store the bytes, not EphemeralSecret
+        // For Ed25519 signing key, we need to extract bytes and recreate
+        let ed25519_secret_bytes = self.ed25519_signing_key.to_bytes();
+        let ed25519_secret_key: SecretKey = ed25519_secret_bytes.into();
+        let ed25519_signing_key = SigningKey::from_bytes(&ed25519_secret_key);
+        
         Self {
             private_key_bytes: self.private_key_bytes,
             public_key: self.public_key,
+            ed25519_signing_key,
         }
     }
 }
