@@ -44,10 +44,16 @@ impl DoubleRatchet {
         let receiving_chain_key_derived = Self::derive_chain_key(root_key, b"receiving")?;
         
         // Swap chains for responder so they match initiator's setup
+        // Alice (initiator): sending_chain = "sending", receiving_chain = "receiving"
+        // Bob (responder): sending_chain = "receiving", receiving_chain = "sending"
+        // This ensures: Alice's sending_chain == Bob's receiving_chain
+        //              Alice's receiving_chain == Bob's sending_chain
         let (sending_chain_key, receiving_chain_key) = if is_initiator {
+            // Initiator: use chains as-is
             (sending_chain_key_derived, receiving_chain_key_derived)
         } else {
             // Responder: swap chains so receiving matches initiator's sending
+            // receiving_chain_key = sending_chain_key_derived ensures Bob's receiving matches Alice's sending
             (receiving_chain_key_derived, sending_chain_key_derived)
         };
         
