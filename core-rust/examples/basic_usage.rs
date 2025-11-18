@@ -66,6 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let alice_result = alice.initiate(&prekey_bundle)?;
     
     println!("  Ephemeral public key: {}", alice_result.ephemeral_public_key_hex);
+    println!("  Identity public key: {}", alice_identity.public_key_hex());
     println!("  Shared secret derived (32 bytes)");
     println!();
 
@@ -100,6 +101,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("  ✗ Shared secrets don't match!");
         return Err("Shared secrets don't match".into());
+    }
+    println!();
+
+    // ============================================================
+    // Step 5b: Negative test — Bob responds with missing/invalid eph
+    // ============================================================
+    println!("Step 5b: Bob responds with INVALID ephemeral key (expected error)...");
+    let mut bob_neg = X3DHResponder::new(bob_identity.clone(), bob_signed_prekey.clone());
+    // Reconstruct a new EphemeralSecret from saved bytes, since EphemeralSecret was moved above
+    let bob_one_time_private2 = unsafe {
+        std::mem::transmute::<[u8; 32], EphemeralSecret>(bob_one_time_private_bytes)
+    };
+    let bob_one_time_public2 = PublicKey::from(&bob_one_time_private2);
+    bob_neg.set_one_time_prekey(1, bob_one_time_private2, bob_one_time_public2);
+    let invalid_eph = ""; // empty -> invalid
+    match bob_neg.respond(&alice_identity.public_key_hex(), invalid_eph) {
+        Ok(_) => {
+            println!("  ✗ Unexpected success with invalid eph");
+            return Err("Responder should fail with invalid ephemeral".into());
+        }
+        Err(e) => {
+            println!("  ✓ Expected failure: {}", e);
+        }
     }
     println!();
 

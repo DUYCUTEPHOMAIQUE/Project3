@@ -2,13 +2,21 @@ import 'package:flutter/material.dart';
 import 'bridge_generated/frb_generated.dart';
 import 'bridge_generated/ffi/api.dart';
 import 'dart:convert';
+import 'dart:io';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // Initialize flutter_rust_bridge
-  await E2EECore.init();
-  
+  if (Platform.isWindows) {
+    // Load the Windows DLL from the Rust crate's target directory
+    final lib = ExternalLibrary.open('core-rust/target/release/e2ee_core.dll');
+    await E2EECore.init(externalLibrary: lib);
+  } else {
+    await E2EECore.init();
+  }
+
   runApp(const E2EEDemoApp());
 }
 
@@ -46,6 +54,7 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
   String _messageText = '';
   String _encryptedMessage = '';
   String _decryptedMessage = '';
+  String _aliceEphemeralPublicKeyHex = '';
   String _statusMessage = '';
   bool _isLoading = false;
 
@@ -67,7 +76,8 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
       final identityJson = generateIdentityKeyPair();
       setState(() {
         _aliceIdentityJson = identityJson;
-        _alicePublicKey = getPublicKeyHexFromJson(identityBytesJson: identityJson);
+        _alicePublicKey =
+            getPublicKeyHexFromJson(identityBytesJson: identityJson);
         _statusMessage = 'Alice keys generated successfully!';
       });
     } catch (e) {
@@ -91,7 +101,8 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
       final identityJson = generateIdentityKeyPair();
       setState(() {
         _bobIdentityJson = identityJson;
-        _bobPublicKey = getPublicKeyHexFromJson(identityBytesJson: identityJson);
+        _bobPublicKey =
+            getPublicKeyHexFromJson(identityBytesJson: identityJson);
       });
 
       // Generate prekey bundle for Bob
@@ -129,13 +140,54 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
     });
 
     try {
-      final sessionId = createSessionInitiator(
+      final resultJson =
+          E2EECore.instance.api.crateFfiApiCreateSessionInitiatorWithEphemeral(
         identityBytesJson: _aliceIdentityJson,
         prekeyBundleJson: _bobPrekeyBundleJson,
       );
+      // Debug output to inspect what Rust returned
+      // If bindings were regenerated to include JSON, this will be JSON string; otherwise plain session_id
+      // ignore: avoid_print
+      print('createSessionInitiator result (raw): $resultJson');
+      // Try pretty-print when JSON
+      try {
+        final dynamic decoded = json.decode(resultJson);
+        final pretty = const JsonEncoder.withIndent('  ').convert(decoded);
+        // ignore: avoid_print
+        print('createSessionInitiator result (pretty):\n$pretty');
+      } catch (_) {
+        // Not JSON, ignore
+      }
+
+      String sessionId = '';
+      String eph = '';
+      final trimmed = resultJson.trimLeft();
+      if (trimmed.startsWith('{')) {
+        try {
+          final Map<String, dynamic> result =
+              json.decode(resultJson) as Map<String, dynamic>;
+          sessionId = result['session_id'] as String? ?? '';
+          eph = result['alice_ephemeral_public_key_hex'] as String? ?? '';
+        } catch (parseErr) {
+          // ignore: avoid_print
+          print('Failed to parse JSON from createSessionInitiator: $parseErr');
+          sessionId = resultJson; // fallback
+        }
+      } else {
+        // Old binding returns plain session id
+        sessionId = resultJson;
+      }
+
+      // ignore: avoid_print
+      print('Alice sessionId: $sessionId');
+      // ignore: avoid_print
+      print(
+          'Alice eph pub key (hex): ${eph.isEmpty ? '<empty>' : eph.substring(0, eph.length.clamp(0, 16)) + '...'}');
       setState(() {
         _aliceSessionId = sessionId;
-        _statusMessage = 'Alice session created: ${sessionId.substring(0, 8)}...';
+        _aliceEphemeralPublicKeyHex = eph;
+        _statusMessage =
+            'Alice session created: ${sessionId.substring(0, 8)}...';
       });
     } catch (e) {
       setState(() {
@@ -149,10 +201,20 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
   }
 
   Future<void> _createBobSession() async {
-    if (_bobIdentityJson.isEmpty || _alicePublicKey.isEmpty) {
+    if (_bobIdentityJson.isEmpty ||
+        _alicePublicKey.isEmpty ||
+        _aliceEphemeralPublicKeyHex.isEmpty) {
       setState(() {
-        _statusMessage = 'Please generate keys and Alice session first!';
+        _statusMessage = 'Please generate keys and create Alice session first!';
       });
+      // Debug guidance if ephemeral key is missing
+      if (_aliceEphemeralPublicKeyHex.isEmpty) {
+        // ignore: avoid_print
+        print('Bob session aborted: aliceEphemeralPublicKeyHex is empty.');
+        // ignore: avoid_print
+        print(
+            'Hint: Regenerate FRB bindings to expose createSessionInitiatorWithEphemeral, or ensure Rust returns JSON.');
+      }
       return;
     }
 
@@ -162,21 +224,29 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
     });
 
     try {
-      // Note: In a real app, Bob would need Alice's ephemeral public key from X3DH
-      // For demo purposes, we'll use a placeholder
-      // In production, this would come from the server/message exchange
+      // Use Alice's ephemeral public key returned from initiator
+      // ignore: avoid_print
+      print('Creating Bob session with params:');
+      // ignore: avoid_print
+      print(
+          '  aliceIdentityHex: ${_alicePublicKey.substring(0, _alicePublicKey.length.clamp(0, 16))}...');
+      // ignore: avoid_print
+      print(
+          '  aliceEphemeralPublicKeyHex: ${_aliceEphemeralPublicKeyHex.substring(0, _aliceEphemeralPublicKeyHex.length.clamp(0, 16))}...');
       final sessionId = createSessionResponder(
         identityBytesJson: _bobIdentityJson,
         signedPrekeyId: 1,
         oneTimePrekeyId: 1,
         aliceIdentityHex: _alicePublicKey,
-        aliceEphemeralPublicKeyHex: '', // This should come from Alice's X3DH result
+        aliceEphemeralPublicKeyHex: _aliceEphemeralPublicKeyHex,
       );
       setState(() {
         _bobSessionId = sessionId;
         _statusMessage = 'Bob session created: ${sessionId.substring(0, 8)}...';
       });
     } catch (e) {
+      // ignore: avoid_print
+      print('Error creating Bob session: $e');
       setState(() {
         _statusMessage = 'Error creating Bob session: $e';
       });
@@ -290,7 +360,8 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
                   children: [
                     const Text(
                       '1. Generate Keys',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -317,9 +388,11 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             if (_alicePublicKey.isNotEmpty)
-                              Text('Alice Public Key: ${_alicePublicKey.substring(0, 16)}...'),
+                              Text(
+                                  'Alice Public Key: ${_alicePublicKey.substring(0, 16)}...'),
                             if (_bobPublicKey.isNotEmpty)
-                              Text('Bob Public Key: ${_bobPublicKey.substring(0, 16)}...'),
+                              Text(
+                                  'Bob Public Key: ${_bobPublicKey.substring(0, 16)}...'),
                           ],
                         ),
                       ),
@@ -339,7 +412,8 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
                   children: [
                     const Text(
                       '2. Create Sessions',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -366,9 +440,9 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             if (_aliceSessionId.isNotEmpty)
-                              Text('Alice Session: ${_aliceSessionId.substring(0, 8)}...'),
+                              Text('Alice Session: ${_aliceSessionId}'),
                             if (_bobSessionId.isNotEmpty)
-                              Text('Bob Session: ${_bobSessionId.substring(0, 8)}...'),
+                              Text('Bob Session: ${_bobSessionId}'),
                           ],
                         ),
                       ),
@@ -388,7 +462,8 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
                   children: [
                     const Text(
                       '3. Encrypt & Decrypt',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 12),
                     TextField(
@@ -452,7 +527,8 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
                               ),
                               child: Text(
                                 _decryptedMessage,
-                                style: const TextStyle(fontWeight: FontWeight.bold),
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold),
                               ),
                             ),
                           ],

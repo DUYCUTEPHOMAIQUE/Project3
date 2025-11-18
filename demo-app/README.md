@@ -74,3 +74,5 @@ This is a simplified demo. In a production app:
 - Ephemeral public key from X3DH should be exchanged via server
 - Session state should be persisted for app restarts
 - Error handling should be more robust
+
+flutter_rust_bridge_codegen generate --rust-input crate::ffi::api --rust-root core-rust --dart-output demo-app/lib/bridge_generated --dart-entrypoint-class-name E2EECore

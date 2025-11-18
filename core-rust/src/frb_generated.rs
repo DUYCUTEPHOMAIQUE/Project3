@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
   default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1125004334;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 2021778567;
 
 // Section: executor
 
@@ -104,6 +104,40 @@ fn wire__crate__ffi__api__create_session_initiator_impl(
           api_identity_bytes_json,
           api_prekey_bundle_json,
         ))?;
+        Ok(output_ok)
+      })())
+    },
+  )
+}
+fn wire__crate__ffi__api__create_session_initiator_with_ephemeral_impl(
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "create_session_initiator_with_ephemeral",
+      port: None,
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_identity_bytes_json = <String>::sse_decode(&mut deserializer);
+      let api_prekey_bundle_json = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      transform_result_sse::<_, ()>((move || {
+        let output_ok =
+          Result::<_, ()>::Ok(crate::ffi::api::create_session_initiator_with_ephemeral(
+            api_identity_bytes_json,
+            api_prekey_bundle_json,
+          ))?;
         Ok(output_ok)
       })())
     },
@@ -398,12 +432,17 @@ fn pde_ffi_dispatcher_sync_impl(
   match func_id {
     1 => wire__crate__ffi__api__close_session_impl(ptr, rust_vec_len, data_len),
     2 => wire__crate__ffi__api__create_session_initiator_impl(ptr, rust_vec_len, data_len),
-    3 => wire__crate__ffi__api__create_session_responder_impl(ptr, rust_vec_len, data_len),
-    4 => wire__crate__ffi__api__decrypt_message_impl(ptr, rust_vec_len, data_len),
-    5 => wire__crate__ffi__api__encrypt_message_impl(ptr, rust_vec_len, data_len),
-    6 => wire__crate__ffi__api__generate_identity_key_pair_impl(ptr, rust_vec_len, data_len),
-    7 => wire__crate__ffi__api__generate_prekey_bundle_impl(ptr, rust_vec_len, data_len),
-    8 => wire__crate__ffi__api__get_public_key_hex_from_json_impl(ptr, rust_vec_len, data_len),
+    3 => wire__crate__ffi__api__create_session_initiator_with_ephemeral_impl(
+      ptr,
+      rust_vec_len,
+      data_len,
+    ),
+    4 => wire__crate__ffi__api__create_session_responder_impl(ptr, rust_vec_len, data_len),
+    5 => wire__crate__ffi__api__decrypt_message_impl(ptr, rust_vec_len, data_len),
+    6 => wire__crate__ffi__api__encrypt_message_impl(ptr, rust_vec_len, data_len),
+    7 => wire__crate__ffi__api__generate_identity_key_pair_impl(ptr, rust_vec_len, data_len),
+    8 => wire__crate__ffi__api__generate_prekey_bundle_impl(ptr, rust_vec_len, data_len),
+    9 => wire__crate__ffi__api__get_public_key_hex_from_json_impl(ptr, rust_vec_len, data_len),
     _ => unreachable!(),
   }
 }
