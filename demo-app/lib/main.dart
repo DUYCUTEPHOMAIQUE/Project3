@@ -309,15 +309,35 @@ class _E2EEDemoHomePageState extends State<E2EEDemoHomePage> {
         sessionId: _bobSessionId,
         envelopeBase64: _encryptedMessage,
       );
+
+      // Decode bytes thành string
       final decryptedText = utf8.decode(decryptedBytes);
+      print('Decrypted message: $decryptedText');
+
+      // Kiểm tra nếu là error message từ Rust
+      if (decryptedText.startsWith('Error:')) {
+        setState(() {
+          _statusMessage = decryptedText;
+          _decryptedMessage = '';
+        });
+        // ignore: avoid_print
+        print('❌ Decryption failed: $decryptedText');
+        return;
+      }
+
+      // Thành công - hiển thị plaintext
       setState(() {
         _decryptedMessage = decryptedText;
         _statusMessage = 'Message decrypted successfully!';
       });
+      // ignore: avoid_print
+      print('✅ Decrypted message: $decryptedText');
     } catch (e) {
       setState(() {
         _statusMessage = 'Error decrypting message: $e';
       });
+      // ignore: avoid_print
+      print('Exception during decryption: $e');
     } finally {
       setState(() {
         _isLoading = false;
