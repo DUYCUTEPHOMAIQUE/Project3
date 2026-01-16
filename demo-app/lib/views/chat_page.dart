@@ -4,7 +4,8 @@ import '../models/chat_message.dart';
 
 /// Chat page view for bidirectional messaging
 class ChatPage extends StatefulWidget {
-  const ChatPage({super.key});
+  final String friendId;
+  const ChatPage({super.key, required this.friendId});
 
   @override
   State<ChatPage> createState() => _ChatPageState();
