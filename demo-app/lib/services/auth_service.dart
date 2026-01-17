@@ -283,12 +283,15 @@ class AuthService {
   }
 
   /// Logout user
-  /// Clear tất cả sessions và tokens
+  /// Clear tất cả sessions và tokens (but preserve identity key for device re-registration)
+  /// Signal-style: Identity key persists across logins for same device
   Future<void> logout() async {
     print('[AuthService] 🚪 Logging out...');
     await _nakamaService.disconnect();
-    await _tokenStorage.clearAll();
-    print('[AuthService] ✅ Logout complete');
+    // Clear all tokens but preserve identity key
+    // Identity key should persist across logins for same device
+    await _tokenStorage.clearAll(clearIdentityKey: false);
+    print('[AuthService] ✅ Logout complete (identity key preserved)');
   }
 
   /// Check authentication status

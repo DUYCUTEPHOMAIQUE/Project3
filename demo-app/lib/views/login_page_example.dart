@@ -4,7 +4,6 @@
 
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
-import '../models/auth/auth_result.dart';
 import 'friend_list_page.dart';
 
 class LoginPageExample extends StatefulWidget {

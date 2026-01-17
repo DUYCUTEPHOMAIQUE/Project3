@@ -1,128 +1,131 @@
-// TODO: Add nakama package khi đã có
-// import 'package:nakama/nakama.dart';
+import 'dart:io';
+import 'package:nakama/nakama.dart';
+import 'token_storage.dart';
 
 /// Service để quản lý Nakama client connection và authentication
-/// 
-/// NOTE: File này là template. Cần install nakama package và implement đầy đủ
 class NakamaService {
-  // TODO: Uncomment khi đã add nakama package
-  // late final Client _client;
-  // Session? _session;
+  NakamaBaseClient? _client;
+  Session? _session;
+  NakamaWebsocketClient? _socket;
+  final TokenStorage _tokenStorage = TokenStorage();
 
-  // TODO: Uncomment và sử dụng khi đã có nakama package
-  // static String get _nakamaHost {
-  //   if (Platform.isAndroid) {
-  //     return '10.0.2.2';
-  //   } else {
-  //     return '127.0.0.1';
-  //   }
-  // }
-  // static const int _nakamaPort = 7350;
-  // static const String _nakamaServerKey = 'defaultkey';
+  static String get _nakamaHost {
+    if (Platform.isAndroid) {
+      return '10.0.2.2';
+    } else {
+      return '127.0.0.1';
+    }
+  }
+  static const String _nakamaServerKey = 'defaultkey';
 
   /// Initialize Nakama client
   Future<void> initialize() async {
-    // TODO: Implement khi đã có nakama package
-    // _client = Client(
-    //   serverKey: _nakamaServerKey,
-    //   host: _nakamaHost,
-    //   port: _nakamaPort,
-    //   ssl: false, // Set true cho production
-    // );
+    _client = getNakamaClient(
+      host: _nakamaHost,
+      ssl: false,
+      serverKey: _nakamaServerKey,
+    );
   }
 
-  /// Authenticate với Nakama sử dụng custom token từ Key Service
-  /// 
-  /// [customToken] là JWT token từ Key Service
-  /// Returns Nakama session nếu thành công
-  Future<Map<String, dynamic>?> authenticateCustom(String customToken) async {
-    // TODO: Implement khi đã có nakama package
-    // try {
-    //   _session = await _client.authenticateCustom(
-    //     id: customToken, // Pass JWT token as custom ID
-    //     username: null, // Will be set by Nakama hook
-    //   );
-    //   
-    //   return {
-    //     'token': _session!.token,
-    //     'refresh_token': _session!.refreshToken,
-    //     'user_id': _session!.userId,
-    //     'username': _session!.username,
-    //     'created': _session!.created,
-    //     'expires_at': _session!.expiresAt,
-    //   };
-    // } catch (e) {
-    //   print('Nakama authentication error: $e');
-    //   return null;
-    // }
-    
-    // Placeholder return
-    return null;
+  /// Authenticate với Nakama sử dụng session token từ TokenStorage
+  /// Returns true nếu thành công
+  Future<bool> authenticate() async {
+    try {
+      final nakamaUserID = await _tokenStorage.getNakamaUserID();
+
+      if (nakamaUserID == null || nakamaUserID.isEmpty) {
+        print('[NakamaService] ❌ No Nakama user ID found');
+        return false;
+      }
+
+      if (_client == null) {
+        await initialize();
+      }
+
+      // Authenticate với custom token (user ID từ Key Service)
+      _session = await _client!.authenticateCustom(
+        id: nakamaUserID,
+        username: null,
+      );
+      print('[NakamaService] ✅ Authenticated with user ID: $nakamaUserID');
+      return true;
+    } catch (e) {
+      print('[NakamaService] ❌ Authentication error: $e');
+      return false;
+    }
   }
 
-  /// Authenticate với device ID (optional, cho anonymous login)
-  Future<Map<String, dynamic>?> authenticateDevice(String deviceId) async {
-    // TODO: Implement khi đã có nakama package
-    // try {
-    //   _session = await _client.authenticateDevice(
-    //     id: deviceId,
-    //     username: null,
-    //   );
-    //   
-    //   return {
-    //     'token': _session!.token,
-    //     'refresh_token': _session!.refreshToken,
-    //     'user_id': _session!.userId,
-    //     'username': _session!.username,
-    //   };
-    // } catch (e) {
-    //   print('Nakama device authentication error: $e');
-    //   return null;
-    // }
-    
-    return null;
+  /// Connect realtime socket
+  /// Returns true nếu thành công
+  Future<bool> connectSocket() async {
+    try {
+      if (_session == null) {
+        final authenticated = await authenticate();
+        if (!authenticated) {
+          return false;
+        }
+      }
+
+      if (_socket != null) {
+        print('[NakamaService] ⚠️  Socket already connected');
+        return true;
+      }
+
+      _socket = NakamaWebsocketClient.init(
+        host: _nakamaHost,
+        port: 7350,
+        ssl: false,
+        token: _session!.token,
+      );
+
+      print('[NakamaService] ✅ Socket connected');
+      return true;
+    } catch (e) {
+      print('[NakamaService] ❌ Socket connection error: $e');
+      return false;
+    }
   }
 
-  /// Get current Nakama session
-  Map<String, dynamic>? getCurrentSession() {
-    // TODO: Return _session data khi đã có nakama package
-    return null;
+  /// Get socket instance (phải connect trước)
+  NakamaWebsocketClient? getSocket() {
+    return _socket;
   }
 
-  /// Check if session is valid
-  bool isSessionValid() {
-    // TODO: Check _session expiry khi đã có nakama package
-    // if (_session == null) return false;
-    // return DateTime.now().millisecondsSinceEpoch < _session!.expiresAt;
-    return false;
+  /// Get session instance
+  Session? getSession() {
+    return _session;
   }
 
-  /// Refresh Nakama session
-  Future<Map<String, dynamic>?> refreshSession(String refreshToken) async {
-    // TODO: Implement khi đã có nakama package
-    // try {
-    //   _session = await _client.sessionRefresh(_session!);
-    //   return {
-    //     'token': _session!.token,
-    //     'refresh_token': _session!.refreshToken,
-    //     'expires_at': _session!.expiresAt,
-    //   };
-    // } catch (e) {
-    //   print('Nakama session refresh error: $e');
-    //   return null;
-    // }
-    
-    return null;
+  /// Get current Nakama user ID from session
+  /// Returns null if not authenticated
+  String? getCurrentNakamaUserID() {
+    return _session?.userId;
   }
 
-  /// Disconnect từ Nakama
+  /// Check if socket is connected
+  bool isSocketConnected() {
+    return _socket != null;
+  }
+
+  /// Disconnect socket
+  Future<void> disconnectSocket() async {
+    try {
+      _socket?.close();
+      _socket = null;
+      print('[NakamaService] ✅ Socket disconnected');
+    } catch (e) {
+      print('[NakamaService] ❌ Error disconnecting socket: $e');
+    }
+  }
+
+  /// Disconnect từ Nakama (close socket và clear session)
   Future<void> disconnect() async {
-    // TODO: Close socket và cleanup khi đã có nakama package
-    // _session = null;
+    await disconnectSocket();
+    _session = null;
   }
 
-  /// Get Nakama client instance (để dùng cho realtime features sau này)
-  // Client getClient() {
-  //   return _client;
-  // }
+  /// Get client instance (for ChatService)
+  NakamaBaseClient? getClient() {
+    return _client;
+  }
 }

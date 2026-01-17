@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 // TODO: Migrate to flutter_secure_storage for production
 // import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -7,12 +8,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 class TokenStorage {
   static const String _keyServiceAccessTokenKey = 'key_service_access_token';
   static const String _keyServiceRefreshTokenKey = 'key_service_refresh_token';
+  static const String _identityKeyPairKey = 'identity_key_pair_json';
   static const String _nakamaSessionTokenKey = 'nakama_session_token';
   static const String _nakamaRefreshTokenKey = 'nakama_refresh_token';
   static const String _nakamaUserIDKey = 'nakama_user_id';
   static const String _userIDKey = 'user_id';
   static const String _usernameKey = 'username';
   static const String _emailKey = 'email';
+  static const String _channelIdPrefix = 'channel_id_'; // channel_id_{friendUserId}
+  static const String _signedPrekeyIdKey = 'signed_prekey_id';
+  static const String _oneTimePrekeyIdsKey = 'one_time_prekey_ids'; // JSON array of IDs
 
   /// Save Key Service access token
   Future<void> saveKeyServiceAccessToken(String token) async {
@@ -112,6 +117,69 @@ class TokenStorage {
     return prefs.getString(_emailKey);
   }
 
+  /// Save identity key pair (used for E2EE sessions)
+  Future<void> saveIdentityKeyPair(String identityKeyPairJson) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_identityKeyPairKey, identityKeyPairJson);
+    print('[TokenStorage] ✅ Saved identity key pair');
+  }
+
+  /// Get identity key pair
+  Future<String?> getIdentityKeyPair() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_identityKeyPairKey);
+  }
+
+  /// Save channel ID for a friend
+  Future<void> saveChannelId(String friendUserId, String channelId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('$_channelIdPrefix$friendUserId', channelId);
+    print('[TokenStorage] ✅ Saved channel ID for friend $friendUserId: $channelId');
+  }
+
+  /// Get channel ID for a friend
+  Future<String?> getChannelId(String friendUserId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('$_channelIdPrefix$friendUserId');
+  }
+
+  /// Clear channel ID for a friend
+  Future<void> clearChannelId(String friendUserId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('$_channelIdPrefix$friendUserId');
+    print('[TokenStorage] 🗑️  Cleared channel ID for friend: $friendUserId');
+  }
+
+  /// Save prekey IDs (signed prekey ID and one-time prekey IDs)
+  Future<void> savePrekeyIds(int signedPrekeyId, List<int> oneTimePrekeyIds) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_signedPrekeyIdKey, signedPrekeyId);
+    await prefs.setString(_oneTimePrekeyIdsKey, jsonEncode(oneTimePrekeyIds));
+    print('[TokenStorage] ✅ Saved prekey IDs: signed=$signedPrekeyId, one-time=$oneTimePrekeyIds');
+  }
+
+  /// Get signed prekey ID
+  Future<int?> getSignedPrekeyId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_signedPrekeyIdKey);
+  }
+
+  /// Get one-time prekey IDs
+  Future<List<int>> getOneTimePrekeyIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final idsJson = prefs.getString(_oneTimePrekeyIdsKey);
+    if (idsJson == null || idsJson.isEmpty) {
+      return [];
+    }
+    try {
+      final ids = jsonDecode(idsJson) as List<dynamic>;
+      return ids.map((id) => id as int).toList();
+    } catch (e) {
+      print('[TokenStorage] ⚠️  Error parsing one-time prekey IDs: $e');
+      return [];
+    }
+  }
+
   /// Check if user is authenticated
   /// Returns true if both Key Service token and Nakama session exist
   Future<bool> isAuthenticated() async {
@@ -140,8 +208,9 @@ class TokenStorage {
     };
   }
 
-  /// Clear all tokens and user info
-  Future<void> clearAll() async {
+  /// Clear all tokens and user info (but keep identity key for device re-registration)
+  /// Identity key should only be cleared when explicitly requested (e.g., account deletion)
+  Future<void> clearAll({bool clearIdentityKey = false}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyServiceAccessTokenKey);
     await prefs.remove(_keyServiceRefreshTokenKey);
@@ -151,7 +220,13 @@ class TokenStorage {
     await prefs.remove(_userIDKey);
     await prefs.remove(_usernameKey);
     await prefs.remove(_emailKey);
-    print('[TokenStorage] 🗑️  Cleared all tokens and user info');
+    
+    if (clearIdentityKey) {
+      await prefs.remove(_identityKeyPairKey);
+      print('[TokenStorage] 🗑️  Cleared all tokens, user info, and identity key');
+    } else {
+      print('[TokenStorage] 🗑️  Cleared all tokens and user info (identity key preserved)');
+    }
   }
 
   /// Print current storage state (for debugging)

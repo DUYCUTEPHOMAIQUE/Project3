@@ -6,11 +6,11 @@ import (
 )
 
 type MemoryStorage struct {
-	users         map[string]*models.User
-	devices       map[string]*models.DeviceInfo
+	users          map[string]*models.User
+	devices        map[string]*models.DeviceInfo
 	friendRequests map[string]*models.FriendRequest // request_id -> FriendRequest
-	friendships   map[string]*models.Friend // friendship_id -> Friend
-	mu            sync.RWMutex
+	friendships    map[string]*models.Friend        // friendship_id -> Friend
+	mu             sync.RWMutex
 }
 
 func NewMemoryStorage() *MemoryStorage {
@@ -106,6 +106,37 @@ func (s *MemoryStorage) GetDevice(deviceID string) (*models.DeviceInfo, error) {
 	}
 
 	return device, nil
+}
+
+// GetDevicesByUserID returns all devices for a user
+func (s *MemoryStorage) GetDevicesByUserID(userID string) ([]*models.DeviceInfo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var devices []*models.DeviceInfo
+	for _, device := range s.devices {
+		if device.UserID == userID {
+			devices = append(devices, device)
+		}
+	}
+
+	if len(devices) == 0 {
+		return nil, ErrDeviceNotFound
+	}
+
+	return devices, nil
+}
+
+func (s *MemoryStorage) DeleteDevice(deviceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.devices[deviceID]; !exists {
+		return ErrDeviceNotFound
+	}
+
+	delete(s.devices, deviceID)
+	return nil
 }
 
 func (s *MemoryStorage) TakeOneTimePrekey(deviceID string) (*models.OneTimePrekeyResponse, error) {
@@ -272,14 +303,14 @@ func (s *MemoryStorage) HasPendingRequest(fromUserID, toUserID string) bool {
 }
 
 var (
-	ErrUserExists          = &StorageError{Message: "Username already exists"}
-	ErrUserNotFound        = &StorageError{Message: "User not found"}
-	ErrDeviceExists        = &StorageError{Message: "Device already registered"}
-	ErrDeviceNotFound      = &StorageError{Message: "Device not found"}
-	ErrFriendRequestExists = &StorageError{Message: "Friend request already exists"}
+	ErrUserExists            = &StorageError{Message: "Username already exists"}
+	ErrUserNotFound          = &StorageError{Message: "User not found"}
+	ErrDeviceExists          = &StorageError{Message: "Device already registered"}
+	ErrDeviceNotFound        = &StorageError{Message: "Device not found"}
+	ErrFriendRequestExists   = &StorageError{Message: "Friend request already exists"}
 	ErrFriendRequestNotFound = &StorageError{Message: "Friend request not found"}
-	ErrFriendshipExists    = &StorageError{Message: "Friendship already exists"}
-	ErrFriendshipNotFound  = &StorageError{Message: "Friendship not found"}
+	ErrFriendshipExists      = &StorageError{Message: "Friendship already exists"}
+	ErrFriendshipNotFound    = &StorageError{Message: "Friendship not found"}
 )
 
 type StorageError struct {

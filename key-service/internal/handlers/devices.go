@@ -30,11 +30,17 @@ func (h *DeviceHandler) Register(c *gin.Context) {
 	req.UserID = &uid
 
 	req.IdentityPublicKey = utils.NormalizeHex(req.IdentityPublicKey)
+	req.IdentityEd25519VerifyingKey = utils.NormalizeHex(req.IdentityEd25519VerifyingKey)
 	req.SignedPrekey.PublicKey = utils.NormalizeHex(req.SignedPrekey.PublicKey)
 	req.SignedPrekey.Signature = utils.NormalizeHex(req.SignedPrekey.Signature)
 
 	if !utils.ValidateHexString(req.IdentityPublicKey, 64) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "identity_public_key must be a valid hex string (64 characters)"})
+		return
+	}
+
+	if !utils.ValidateHexString(req.IdentityEd25519VerifyingKey, 64) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "identity_ed25519_verifying_key must be a valid hex string (64 characters)"})
 		return
 	}
 
@@ -62,9 +68,10 @@ func (h *DeviceHandler) Register(c *gin.Context) {
 	}
 
 	device := &models.DeviceInfo{
-		DeviceID:          req.DeviceID,
-		UserID:            *req.UserID,
-		IdentityPublicKey: utils.NormalizeHex(req.IdentityPublicKey),
+		DeviceID:                   req.DeviceID,
+		UserID:                     *req.UserID,
+		IdentityPublicKey:          utils.NormalizeHex(req.IdentityPublicKey),
+		IdentityEd25519VerifyingKey: utils.NormalizeHex(req.IdentityEd25519VerifyingKey),
 		SignedPrekey: models.SignedPrekey{
 			ID:        req.SignedPrekey.ID,
 			PublicKey: utils.NormalizeHex(req.SignedPrekey.PublicKey),
@@ -108,7 +115,7 @@ func (h *DeviceHandler) GetPrekeyBundle(c *gin.Context) {
 
 	response := models.PrekeyBundleResponse{
 		IdentityKey:                device.IdentityPublicKey,
-		IdentityEd25519VerifyingKey: "",
+		IdentityEd25519VerifyingKey: device.IdentityEd25519VerifyingKey,
 		SignedPrekey: models.SignedPrekeyResponse{
 			ID:        device.SignedPrekey.ID,
 			PublicKey: device.SignedPrekey.PublicKey,
@@ -122,4 +129,78 @@ func (h *DeviceHandler) GetPrekeyBundle(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// GetPrekeyBundleByUserID gets prekey bundle for a user (uses first available device)
+func (h *DeviceHandler) GetPrekeyBundleByUserID(c *gin.Context) {
+	userID := c.Param("user_id")
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id is required"})
+		return
+	}
+
+	// Get all devices for this user
+	devices, err := h.store.GetDevicesByUserID(userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No devices found for user"})
+		return
+	}
+
+	// Use the first device (or could implement logic to select preferred device)
+	device := devices[0]
+
+	oneTimePrekey, _ := h.store.TakeOneTimePrekey(device.DeviceID)
+
+	response := models.PrekeyBundleResponse{
+		IdentityKey:                device.IdentityPublicKey,
+		IdentityEd25519VerifyingKey: device.IdentityEd25519VerifyingKey,
+		SignedPrekey: models.SignedPrekeyResponse{
+			ID:        device.SignedPrekey.ID,
+			PublicKey: device.SignedPrekey.PublicKey,
+			Signature: device.SignedPrekey.Signature,
+			Timestamp: device.SignedPrekey.Timestamp,
+		},
+	}
+
+	if oneTimePrekey != nil {
+		response.OneTimePrekey = oneTimePrekey
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// DeleteDevice deletes a device (only allowed by device owner)
+func (h *DeviceHandler) DeleteDevice(c *gin.Context) {
+	deviceID := c.Param("device_id")
+	if deviceID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "device_id is required"})
+		return
+	}
+
+	userID, _ := c.Get("user_id")
+	uid := userID.(string)
+
+	// Verify device belongs to user
+	device, err := h.store.GetDevice(deviceID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Device not found"})
+		return
+	}
+
+	if device.UserID != uid {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Device does not belong to user"})
+		return
+	}
+
+	// Delete device
+	if err := h.store.DeleteDevice(deviceID); err != nil {
+		if err == storage.ErrDeviceNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Device not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete device"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Device deleted successfully"})
 }

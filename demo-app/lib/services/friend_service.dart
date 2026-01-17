@@ -277,9 +277,19 @@ class FriendService {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         final friends = data['friends'] as List<dynamic>? ?? [];
         
-        return friends
+        final friendList = friends
             .map((f) => Friend.fromJson(f as Map<String, dynamic>))
             .toList();
+        
+        // Save channel IDs to local storage
+        for (final friend in friendList) {
+          if (friend.channelId != null && friend.channelId!.isNotEmpty) {
+            await _tokenStorage.saveChannelId(friend.userId, friend.channelId!);
+            print('[FriendService] ✅ Saved channel ID for ${friend.username}: ${friend.channelId}');
+          }
+        }
+        
+        return friendList;
       } catch (e) {
         print('[FriendService] ❌ Parse error: $e');
         return [];

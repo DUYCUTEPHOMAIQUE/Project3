@@ -37,6 +37,13 @@ func main() {
 		{
 			devices.POST("/register", deviceHandler.Register)
 			devices.GET("/:device_id/prekey-bundle", deviceHandler.GetPrekeyBundle)
+			devices.DELETE("/:device_id", deviceHandler.DeleteDevice)
+		}
+
+		users := api.Group("/users")
+		users.Use(authMiddleware.RequireAuth())
+		{
+			users.GET("/:user_id/prekey-bundle", deviceHandler.GetPrekeyBundleByUserID)
 		}
 
 		friends := api.Group("/friends")

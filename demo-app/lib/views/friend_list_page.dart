@@ -282,7 +282,10 @@ class _FriendListPageState extends State<FriendListPage> with SingleTickerProvid
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => ChatPage(friendId: friend.userId),
+                      builder: (_) => ChatPage(
+                        friendId: friend.userId,
+                        friendNakamaUserId: friend.nakamaUserId,
+                      ),
                     ),
                   );
                 },
@@ -303,7 +306,10 @@ class _FriendListPageState extends State<FriendListPage> with SingleTickerProvid
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => ChatPage(friendId: friend.userId),
+                builder: (_) => ChatPage(
+                  friendId: friend.userId,
+                  friendNakamaUserId: friend.nakamaUserId,
+                ),
               ),
             );
           },

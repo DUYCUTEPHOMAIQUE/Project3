@@ -54,3 +54,14 @@ func GenerateRegistrationToken() string {
 func NormalizeHex(s string) string {
 	return strings.ToLower(s)
 }
+
+// GenerateNakamaChannelID generates a deterministic Nakama DM channel ID
+// Format: 4.{userId1}.{userId2} where userIds are sorted alphabetically
+// This ensures both users get the same channel ID
+func GenerateNakamaChannelID(userID1, userID2 string) string {
+	// Sort user IDs alphabetically to ensure deterministic channel ID
+	if userID1 > userID2 {
+		userID1, userID2 = userID2, userID1
+	}
+	return "4." + userID1 + "." + userID2
+}

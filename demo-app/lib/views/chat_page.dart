@@ -1,20 +1,34 @@
 import 'package:flutter/material.dart';
-import '../viewmodels/chat_view_model.dart';
+import '../viewmodels/nakama_chat_view_model.dart';
 import '../models/chat_message.dart';
 
-/// Chat page view for bidirectional messaging
+/// Chat page view for real-time messaging via Nakama
 class ChatPage extends StatefulWidget {
-  final String friendId;
-  const ChatPage({super.key, required this.friendId});
+  final String friendId; // Key Service user ID
+  final String? friendNakamaUserId; // Nakama user ID (optional, will try to get if null)
+  const ChatPage({
+    super.key,
+    required this.friendId,
+    this.friendNakamaUserId,
+  });
 
   @override
   State<ChatPage> createState() => _ChatPageState();
 }
 
 class _ChatPageState extends State<ChatPage> {
-  final ChatViewModel _viewModel = ChatViewModel();
+  late final NakamaChatViewModel _viewModel;
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _viewModel = NakamaChatViewModel(
+      friendUserId: widget.friendId,
+      friendNakamaUserId: widget.friendNakamaUserId,
+    );
+  }
 
   @override
   void dispose() {
@@ -41,7 +55,7 @@ class _ChatPageState extends State<ChatPage> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: const Text('E2EE Chat - Alice & Bob'),
+        title: Text(_viewModel.isConnected ? 'Chat' : 'Connecting...'),
         actions: [
           IconButton(
             icon: const Icon(Icons.delete_outline),
@@ -73,65 +87,24 @@ class _ChatPageState extends State<ChatPage> {
                   ),
                 ),
 
-              // Setup section (collapsible)
-              ExpansionTile(
-                title: const Text('Setup (Keys & Sessions)'),
-                initiallyExpanded: _viewModel.messages.isEmpty,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: _viewModel.isLoading
-                                    ? null
-                                    : () => _viewModel.generateAliceKeys(),
-                                child: const Text('Generate Alice Keys'),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: _viewModel.isLoading
-                                    ? null
-                                    : () => _viewModel.generateBobKeys(),
-                                child: const Text('Generate Bob Keys'),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: _viewModel.isLoading ||
-                                        !_viewModel.canCreateAliceSession
-                                    ? null
-                                    : () => _viewModel.createAliceSession(),
-                                child: const Text('Create Alice Session'),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: _viewModel.isLoading ||
-                                        !_viewModel.canCreateBobSession
-                                    ? null
-                                    : () => _viewModel.createBobSession(),
-                                child: const Text('Create Bob Session'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+              // Connection status
+              if (!_viewModel.isConnected)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  color: Colors.orange.shade50,
+                  child: const Row(
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 8),
+                      Text('Connecting to chat...'),
+                    ],
                   ),
-                ],
-              ),
+                ),
 
               // Chat messages list
               Expanded(
@@ -185,21 +158,13 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    // Send as Alice button
+                    // Send button
                     IconButton(
-                      icon: const Icon(Icons.send, color: Colors.blue),
-                      onPressed: _viewModel.isLoading || !_viewModel.canSendAsAlice
-                          ? null
-                          : () => _handleSendAsAlice(),
-                      tooltip: 'Send as Alice',
-                    ),
-                    // Send as Bob button
-                    IconButton(
-                      icon: const Icon(Icons.send, color: Colors.green),
-                      onPressed: _viewModel.isLoading || !_viewModel.canSendAsBob
-                          ? null
-                          : () => _handleSendAsBob(),
-                      tooltip: 'Send as Bob',
+                      icon: const Icon(Icons.send),
+                      onPressed: _viewModel.canSend
+                          ? () => _handleSend()
+                          : null,
+                      tooltip: 'Send message',
                     ),
                   ],
                 ),
@@ -216,22 +181,21 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Widget _buildMessageBubble(ChatMessage message) {
-    final isAlice = message.sender == 'alice';
-    final isDecrypted = message.isDecrypted;
+    final isMe = message.sender == 'me';
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(
         mainAxisAlignment:
-            isAlice ? MainAxisAlignment.end : MainAxisAlignment.start,
+            isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (!isAlice) ...[
+          if (!isMe) ...[
             CircleAvatar(
-              backgroundColor: Colors.green,
+              backgroundColor: Colors.grey,
               radius: 16,
               child: Text(
-                'B',
+                message.sender[0].toUpperCase(),
                 style: const TextStyle(color: Colors.white, fontSize: 14),
               ),
             ),
@@ -240,7 +204,7 @@ class _ChatPageState extends State<ChatPage> {
           Flexible(
             child: Column(
               crossAxisAlignment:
-                  isAlice ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                  isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               children: [
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -248,50 +212,22 @@ class _ChatPageState extends State<ChatPage> {
                     vertical: 10,
                   ),
                   decoration: BoxDecoration(
-                    color: isAlice ? Colors.blue.shade100 : Colors.green.shade100,
+                    color: isMe ? Colors.blue.shade100 : Colors.grey.shade200,
                     borderRadius: BorderRadius.circular(18),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (!isDecrypted && message.isEncrypted)
-                        Row(
-                          children: [
-                            const SizedBox(
-                              width: 12,
-                              height: 12,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            const Text(
-                              'Decrypting...',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontStyle: FontStyle.italic,
-                              ),
-                            ),
-                            const Spacer(),
-                            TextButton(
-                              onPressed: () => _viewModel.decryptMessage(message),
-                              child: const Text('Decrypt'),
-                            ),
-                          ],
-                        )
-                      else
-                        Text(
-                          isDecrypted
-                              ? message.decryptedText ?? message.plaintext
-                              : message.plaintext,
-                          style: const TextStyle(fontSize: 14),
-                        ),
+                      Text(
+                        message.plaintext,
+                        style: const TextStyle(fontSize: 14),
+                      ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${message.sender.toUpperCase()} • ${_formatTime(message.timestamp)}',
+                  _formatTime(message.timestamp),
                   style: TextStyle(
                     fontSize: 10,
                     color: Colors.grey.shade600,
@@ -300,14 +236,14 @@ class _ChatPageState extends State<ChatPage> {
               ],
             ),
           ),
-          if (isAlice) ...[
+          if (isMe) ...[
             const SizedBox(width: 8),
             CircleAvatar(
               backgroundColor: Colors.blue,
               radius: 16,
               child: const Text(
-                'A',
-                style: TextStyle(color: Colors.white, fontSize: 14),
+                'Me',
+                style: TextStyle(color: Colors.white, fontSize: 10),
               ),
             ),
           ],
@@ -321,37 +257,11 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   void _handleSend() {
-    // Default: send as Alice if both sessions exist, otherwise use available session
-    if (_viewModel.canSendAsAlice) {
-      _handleSendAsAlice();
-    } else if (_viewModel.canSendAsBob) {
-      _handleSendAsBob();
-    }
-  }
-
-  void _handleSendAsAlice() {
     final text = _inputController.text.trim();
-    if (text.isNotEmpty) {
-      _viewModel.sendMessageAsAlice(text);
+    if (text.isNotEmpty && _viewModel.canSend) {
+      _viewModel.sendMessage(text);
       _inputController.clear();
       _scrollToBottom();
-      // Auto-decrypt after a short delay
-      Future.delayed(const Duration(milliseconds: 500), () {
-        _viewModel.decryptAllPendingMessages();
-      });
-    }
-  }
-
-  void _handleSendAsBob() {
-    final text = _inputController.text.trim();
-    if (text.isNotEmpty) {
-      _viewModel.sendMessageAsBob(text);
-      _inputController.clear();
-      _scrollToBottom();
-      // Auto-decrypt after a short delay
-      Future.delayed(const Duration(milliseconds: 500), () {
-        _viewModel.decryptAllPendingMessages();
-      });
     }
   }
 }

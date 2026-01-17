@@ -3,6 +3,7 @@ package handlers
 import (
 	"key-service/internal/models"
 	"key-service/internal/storage"
+	"key-service/internal/utils"
 	"net/http"
 	"time"
 
@@ -133,12 +134,22 @@ func (h *FriendHandler) AcceptFriendRequest(c *gin.Context) {
 	fromUser, _ := h.store.GetUserByID(friendRequest.FromUserID)
 	toUser, _ := h.store.GetUserByID(friendRequest.ToUserID)
 
+	// Generate channel ID if both users have Nakama user IDs
+	var channelID *string
+	if fromUser.NakamaUserID != nil && toUser.NakamaUserID != nil &&
+		*fromUser.NakamaUserID != "" && *toUser.NakamaUserID != "" {
+		chID := utils.GenerateNakamaChannelID(*fromUser.NakamaUserID, *toUser.NakamaUserID)
+		channelID = &chID
+	}
+
 	// Create friendship from requester's perspective (fromUser owns this friendship)
 	friend1 := &models.Friend{
 		OwnerUserID:  fromUser.UserID,
 		UserID:       toUser.UserID,
 		Username:     toUser.Username,
 		Email:        toUser.Email,
+		NakamaUserID: toUser.NakamaUserID,
+		ChannelID:    channelID,
 		FriendshipID: friendshipID1,
 		CreatedAt:    time.Now().Unix(),
 	}
@@ -149,6 +160,8 @@ func (h *FriendHandler) AcceptFriendRequest(c *gin.Context) {
 		UserID:       fromUser.UserID,
 		Username:     fromUser.Username,
 		Email:        fromUser.Email,
+		NakamaUserID: fromUser.NakamaUserID,
+		ChannelID:    channelID, // Same channel ID for both friends
 		FriendshipID: friendshipID2,
 		CreatedAt:    time.Now().Unix(),
 	}
