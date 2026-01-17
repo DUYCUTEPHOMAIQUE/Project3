@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'views/login_page.dart';
 import 'views/friend_list_page.dart';
-import 'services/api_service.dart';
+import 'services/auth_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -58,20 +58,23 @@ class AuthWrapper extends StatefulWidget {
 }
 
 class _AuthWrapperState extends State<AuthWrapper> {
-  final _apiService = ApiService();
+  final _authService = AuthService();
   bool _isLoading = true;
   bool _isAuthenticated = false;
 
   @override
   void initState() {
     super.initState();
-    _checkAuth();
+    _initializeAndCheckAuth();
   }
 
-  Future<void> _checkAuth() async {
-    final token = await _apiService.getToken();
+  Future<void> _initializeAndCheckAuth() async {
+    print('[AuthWrapper] 🔍 Checking authentication status...');
+    await _authService.initialize();
+    final isAuth = await _authService.isAuthenticated();
+    print('[AuthWrapper] 🔍 Auth status: $isAuth');
     setState(() {
-      _isAuthenticated = token != null && token.isNotEmpty;
+      _isAuthenticated = isAuth;
       _isLoading = false;
     });
   }

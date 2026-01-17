@@ -38,6 +38,11 @@ dependencies:
   ffigen: ^9.0.0
   http: ^1.1.0
   shared_preferences: ^2.2.2
+  provider: ^6.1.1
+  # TODO: Uncomment khi đã có Nakama Flutter client package
+  # nakama: ^3.0.0  # Nakama Flutter client
+  # flutter_secure_storage: ^9.0.0  # Secure token storage (recommended for production)
+  # jwt_decoder: ^2.0.0  # JWT token parsing (optional)
 
 dev_dependencies:
   flutter_test:

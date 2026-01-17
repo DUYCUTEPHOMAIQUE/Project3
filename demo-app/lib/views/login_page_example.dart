@@ -1,15 +1,20 @@
+// EXAMPLE: Cách sử dụng AuthService trong LoginPage
+// File này là ví dụ, không phải file chính thức
+// Copy logic này vào login_page.dart hiện tại
+
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../models/auth/auth_result.dart';
 import 'friend_list_page.dart';
 
-class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
+class LoginPageExample extends StatefulWidget {
+  const LoginPageExample({super.key});
 
   @override
-  State<LoginPage> createState() => _LoginPageState();
+  State<LoginPageExample> createState() => _LoginPageExampleState();
 }
 
-class _LoginPageState extends State<LoginPage> {
+class _LoginPageExampleState extends State<LoginPageExample> {
   final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -20,6 +25,7 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void initState() {
     super.initState();
+    // Initialize auth service
     _authService.initialize();
   }
 
@@ -41,14 +47,13 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
-      print('[LoginPage] 🔐 Starting login process...');
+      // Sử dụng AuthService thay vì ApiService trực tiếp
       final result = await _authService.login(
         username: _usernameController.text.trim(),
         password: _passwordController.text,
       );
 
       if (!result.success) {
-        print('[LoginPage] ❌ Login failed: ${result.error}');
         setState(() {
           _error = result.error ?? 'Login failed';
           _isLoading = false;
@@ -56,21 +61,14 @@ class _LoginPageState extends State<LoginPage> {
         return;
       }
 
-      print('[LoginPage] ✅ Login successful!');
-      print('[LoginPage] 📝 User ID: ${result.userId}');
-      print('[LoginPage] 📝 Username: ${result.username}');
-      print('[LoginPage] 📝 Has Key Service token: ${result.keyServiceToken != null}');
-      print('[LoginPage] 📝 Has Nakama session: ${result.nakamaSessionToken != null}');
-
+      // Login thành công - AuthService đã tự động lưu tokens
       if (mounted) {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const FriendListPage()),
         );
       }
-    } catch (e, stackTrace) {
-      print('[LoginPage] ❌ Exception during login: $e');
-      print('[LoginPage] ❌ Stack trace: $stackTrace');
+    } catch (e) {
       setState(() {
         _error = 'Login failed: $e';
         _isLoading = false;
@@ -113,7 +111,10 @@ class _LoginPageState extends State<LoginPage> {
               ),
               if (_error.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                Text(_error, style: const TextStyle(color: Colors.red)),
+                Text(
+                  _error,
+                  style: const TextStyle(color: Colors.red),
+                ),
               ],
               const SizedBox(height: 24),
               ElevatedButton(
@@ -127,7 +128,7 @@ class _LoginPageState extends State<LoginPage> {
                 onPressed: () {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const RegisterPage()),
+                    MaterialPageRoute(builder: (_) => const RegisterPageExample()),
                   );
                 },
                 child: const Text('Register'),
@@ -140,14 +141,14 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
-class RegisterPage extends StatefulWidget {
-  const RegisterPage({super.key});
+class RegisterPageExample extends StatefulWidget {
+  const RegisterPageExample({super.key});
 
   @override
-  State<RegisterPage> createState() => _RegisterPageState();
+  State<RegisterPageExample> createState() => _RegisterPageExampleState();
 }
 
-class _RegisterPageState extends State<RegisterPage> {
+class _RegisterPageExampleState extends State<RegisterPageExample> {
   final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -175,27 +176,21 @@ class _RegisterPageState extends State<RegisterPage> {
       return;
     }
 
-    final username = _usernameController.text.trim();
-    final password = _passwordController.text;
-    final email = _emailController.text.trim().isEmpty 
-        ? null 
-        : _emailController.text.trim();
-
     setState(() {
       _isLoading = true;
       _error = '';
     });
 
     try {
-      print('[RegisterPage] 📝 Starting registration process...');
       final result = await _authService.register(
-        username: username,
-        password: password,
-        email: email,
+        username: _usernameController.text.trim(),
+        password: _passwordController.text,
+        email: _emailController.text.trim().isEmpty
+            ? null
+            : _emailController.text.trim(),
       );
 
       if (!result.success) {
-        print('[RegisterPage] ❌ Registration failed: ${result.error}');
         setState(() {
           _error = result.error ?? 'Registration failed';
           _isLoading = false;
@@ -203,24 +198,16 @@ class _RegisterPageState extends State<RegisterPage> {
         return;
       }
 
-      print('[RegisterPage] ✅ Registration successful!');
-      print('[RegisterPage] 📝 User ID: ${result.userId}');
-      print('[RegisterPage] 📝 Username: ${result.username}');
-      print('[RegisterPage] 📝 Has Nakama session: ${result.nakamaSessionToken != null}');
-      print('[RegisterPage] ⚠️  Note: Access token will be available after login');
-
+      // Registration thành công
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Registration successful! Please login.'),
-            backgroundColor: Colors.green,
           ),
         );
         Navigator.pop(context);
       }
-    } catch (e, stackTrace) {
-      print('[RegisterPage] ❌ Exception during registration: $e');
-      print('[RegisterPage] ❌ Stack trace: $stackTrace');
+    } catch (e) {
       setState(() {
         _error = 'Registration failed: $e';
         _isLoading = false;
@@ -275,7 +262,10 @@ class _RegisterPageState extends State<RegisterPage> {
               ),
               if (_error.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                Text(_error, style: const TextStyle(color: Colors.red)),
+                Text(
+                  _error,
+                  style: const TextStyle(color: Colors.red),
+                ),
               ],
               const SizedBox(height: 24),
               ElevatedButton(

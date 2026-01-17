@@ -17,6 +17,7 @@ func main() {
 	store := storage.NewMemoryStorage()
 	authHandler := handlers.NewAuthHandler(store)
 	deviceHandler := handlers.NewDeviceHandler(store)
+	friendHandler := handlers.NewFriendHandler(store)
 	authMiddleware := middleware.NewAuthMiddleware()
 
 	r := gin.Default()
@@ -36,6 +37,18 @@ func main() {
 		{
 			devices.POST("/register", deviceHandler.Register)
 			devices.GET("/:device_id/prekey-bundle", deviceHandler.GetPrekeyBundle)
+		}
+
+		friends := api.Group("/friends")
+		friends.Use(authMiddleware.RequireAuth())
+		{
+			friends.POST("/request", friendHandler.SendFriendRequest)
+			friends.POST("/accept", friendHandler.AcceptFriendRequest)
+			friends.POST("/reject", friendHandler.RejectFriendRequest)
+			friends.POST("/remove", friendHandler.RemoveFriend)
+			friends.GET("/requests/sent", friendHandler.GetSentFriendRequests) // Must be before /requests
+			friends.GET("/requests", friendHandler.GetFriendRequests)
+			friends.GET("/list", friendHandler.GetFriends)
 		}
 	}
 

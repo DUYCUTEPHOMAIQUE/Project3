@@ -1,34 +1,32 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'token_storage.dart';
 
 class ApiService {
+  final TokenStorage _tokenStorage = TokenStorage();
+
   static String get baseUrl {
     if (Platform.isAndroid) {
-      return 'http://10.0.2.2:8080/api/v1';
+      return 'http://10.0.2.2:8099/api/v1';
     } else if (Platform.isIOS) {
-      return 'http://127.0.0.1:8080/api/v1';
+      return 'http://127.0.0.1:8099/api/v1';
     } else if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
-      return 'http://127.0.0.1:8080/api/v1';
+      return 'http://127.0.0.1:8099/api/v1';
     }
-    return 'http://127.0.0.1:8080/api/v1';
+    return 'http://127.0.0.1:8099/api/v1';
   }
-  static const String tokenKey = 'access_token';
 
   Future<String?> getToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(tokenKey);
+    return await _tokenStorage.getKeyServiceAccessToken();
   }
 
   Future<void> saveToken(String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(tokenKey, token);
+    await _tokenStorage.saveKeyServiceAccessToken(token);
   }
 
   Future<void> clearToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(tokenKey);
+    await _tokenStorage.clearAll();
   }
 
   Future<Map<String, dynamic>> register(String username, String password, String? email) async {
@@ -109,14 +107,21 @@ class ApiService {
     try {
       final token = await getToken();
       
+      if (token == null || token.isEmpty) {
+        print('[API] ❌ No access token available');
+        return {'error': 'Not authenticated. Please login again.'};
+      }
+      
       final bool isEmail = query.contains('@');
       final body = isEmail 
           ? {'email': query}
           : {'username': query};
       
-      print('[API] Send Friend Request:');
-      print('  Query: $query (${isEmail ? "email" : "username"})');
-      print('  Body: ${jsonEncode(body)}');
+      print('[API] 📤 Send Friend Request:');
+      print('[API]   Query: $query (${isEmail ? "email" : "username"})');
+      print('[API]   URL: $baseUrl/friends/request');
+      print('[API]   Token: ${token.substring(0, 20)}...');
+      print('[API]   Body: ${jsonEncode(body)}');
       
       final response = await http.post(
         Uri.parse('$baseUrl/friends/request'),
@@ -127,9 +132,14 @@ class ApiService {
         body: jsonEncode(body),
       ).timeout(const Duration(seconds: 10));
 
-      print('[API] Friend Request Response:');
-      print('  Status: ${response.statusCode}');
-      print('  Body: ${response.body}');
+      print('[API] 📥 Friend Request Response:');
+      print('[API]   Status: ${response.statusCode}');
+      print('[API]   Body: ${response.body}');
+
+      if (response.statusCode == 401) {
+        print('[API] ❌ Unauthorized - Token may be invalid or expired');
+        return {'error': 'Unauthorized. Please login again.'};
+      }
 
       try {
         return jsonDecode(response.body) as Map<String, dynamic>;
@@ -137,7 +147,7 @@ class ApiService {
         return {'error': 'Invalid response: ${response.statusCode}'};
       }
     } catch (e) {
-      print('[API] Friend Request Error: $e');
+      print('[API] ❌ Friend Request Error: $e');
       return {'error': 'Network error: $e'};
     }
   }
@@ -145,6 +155,16 @@ class ApiService {
   Future<Map<String, dynamic>> acceptFriendRequest(String requestId) async {
     try {
       final token = await getToken();
+      
+      if (token == null || token.isEmpty) {
+        print('[API] ❌ No access token available');
+        return {'error': 'Not authenticated. Please login again.'};
+      }
+      
+      print('[API] 📤 Accept Friend Request:');
+      print('[API]   Request ID: $requestId');
+      print('[API]   Token: ${token.substring(0, 20)}...');
+      
       final response = await http.post(
         Uri.parse('$baseUrl/friends/accept'),
         headers: {
@@ -154,12 +174,22 @@ class ApiService {
         body: jsonEncode({'request_id': requestId}),
       ).timeout(const Duration(seconds: 10));
 
+      print('[API] 📥 Accept Response:');
+      print('[API]   Status: ${response.statusCode}');
+      print('[API]   Body: ${response.body}');
+
+      if (response.statusCode == 401) {
+        print('[API] ❌ Unauthorized - Token may be invalid or expired');
+        return {'error': 'Unauthorized. Please login again.'};
+      }
+
       try {
         return jsonDecode(response.body) as Map<String, dynamic>;
       } catch (_) {
         return {'error': 'Invalid response: ${response.statusCode}'};
       }
     } catch (e) {
+      print('[API] ❌ Accept Friend Request Error: $e');
       return {'error': 'Network error: $e'};
     }
   }
@@ -167,10 +197,27 @@ class ApiService {
   Future<List<dynamic>> getFriendRequests() async {
     try {
       final token = await getToken();
+      
+      if (token == null || token.isEmpty) {
+        print('[API] ❌ No access token available');
+        return [];
+      }
+      
+      print('[API] 📤 Get Friend Requests:');
+      print('[API]   Token: ${token.substring(0, 20)}...');
+      
       final response = await http.get(
         Uri.parse('$baseUrl/friends/requests'),
         headers: {'Authorization': 'Bearer $token'},
       ).timeout(const Duration(seconds: 10));
+
+      print('[API] 📥 Get Friend Requests Response:');
+      print('[API]   Status: ${response.statusCode}');
+
+      if (response.statusCode == 401) {
+        print('[API] ❌ Unauthorized - Token may be invalid or expired');
+        return [];
+      }
 
       try {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -179,6 +226,7 @@ class ApiService {
         return [];
       }
     } catch (e) {
+      print('[API] ❌ Get Friend Requests Error: $e');
       return [];
     }
   }
@@ -186,10 +234,27 @@ class ApiService {
   Future<List<dynamic>> getFriends() async {
     try {
       final token = await getToken();
+      
+      if (token == null || token.isEmpty) {
+        print('[API] ❌ No access token available');
+        return [];
+      }
+      
+      print('[API] 📤 Get Friends List:');
+      print('[API]   Token: ${token.substring(0, 20)}...');
+      
       final response = await http.get(
         Uri.parse('$baseUrl/friends/list'),
         headers: {'Authorization': 'Bearer $token'},
       ).timeout(const Duration(seconds: 10));
+
+      print('[API] 📥 Get Friends Response:');
+      print('[API]   Status: ${response.statusCode}');
+
+      if (response.statusCode == 401) {
+        print('[API] ❌ Unauthorized - Token may be invalid or expired');
+        return [];
+      }
 
       try {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -198,6 +263,7 @@ class ApiService {
         return [];
       }
     } catch (e) {
+      print('[API] ❌ Get Friends Error: $e');
       return [];
     }
   }
